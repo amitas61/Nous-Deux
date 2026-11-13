@@ -1,0 +1,45 @@
+name: Rappels de factures
+
+on:
+  schedule:
+    # Tous les jours vers 8 h (heure de Montréal/Toronto, l'hiver) — 13:00 UTC.
+    - cron: "7 13 * * *"
+  workflow_dispatch: {}   # bouton « Run workflow » pour tester à la main
+
+permissions:
+  contents: write
+
+jobs:
+  rappels:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Installer
+        run: npm install --prefix scripts --no-audit --no-fund
+
+      - name: Envoyer les rappels
+        run: |
+          export APP_URL="https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+          node scripts/send-reminders.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      # GitHub met en pause les tâches planifiées d'un dépôt public sans activité
+      # depuis 60 jours. Ce petit commit vide tous les ~45 jours les garde actives.
+      - name: Garder les rappels actifs
+        run: |
+          last=$(git log -1 --format=%ct)
+          age=$(( ($(date +%s) - last) / 86400 ))
+          if [ "$age" -ge 45 ]; then
+            git config user.name "rappels-bot"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Garder les rappels actifs"
+            git push
+          fi
