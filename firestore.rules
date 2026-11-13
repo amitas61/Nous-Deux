@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ✏️ Remplace par vos deux adresses courriel (en minuscules).
+    //    Ce sont les mêmes que les deux comptes créés à l'étape 3.
+    function estMembre() {
+      return request.auth != null
+        && request.auth.token.email.lower() in [
+          'toi@exemple.com',
+          'conjointe@outlook.com'
+        ];
+    }
+
+    match /{document=**} {
+      allow read, write: if estMembre();
+    }
+  }
+}

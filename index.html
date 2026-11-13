@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="fr-CA">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2f5d50">
+  <meta name="description" content="Nos listes, nos notes et nos factures, ensemble.">
+  <title>Nous deux</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="icons/icon-192.png" alt=""><span>Nous deux</span></div>
+    <div class="top-actions">
+      <span id="sync-dot" class="sync-dot" title="Synchronisation"></span>
+      <button id="btn-settings" class="icon-btn" aria-label="Réglages">
+        <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M12 15.5A3.5 3.5 0 1 1 12 8.5a3.5 3.5 0 0 1 0 7Zm7.43-2.53c.04-.32.07-.64.07-.97s-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1a7.3 7.3 0 0 0-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.58-1.69.98l-2.49-1a.5.5 0 0 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1s.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.43.49.43h4c.25 0 .46-.19.49-.43l.38-2.65c.61-.25 1.17-.58 1.69-.98l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main id="app">
+    <div id="screen-loading" class="screen center"><div class="spinner"></div><p>Chargement…</p></div>
+
+    <div id="screen-login" class="screen center" hidden>
+      <img class="hero-icon" src="icons/icon-512.png" alt="">
+      <h1>Nous deux</h1>
+      <p class="muted">Nos listes, nos notes et nos factures, au même endroit.</p>
+      <form id="f-login" class="login-form">
+        <label class="field"><span>Courriel</span><input name="email" type="email" autocomplete="username" inputmode="email" required></label>
+        <label class="field"><span>Mot de passe</span><input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn primary big block">Se connecter</button>
+        <button type="button" class="link-btn" id="btn-forgot">Mot de passe oublié ?</button>
+      </form>
+      <p id="login-error" class="error" hidden></p>
+      <div class="login-or"><span>ou</span></div>
+      <button id="btn-login" class="btn">Se connecter avec Google</button>
+    </div>
+
+    <div id="screen-denied" class="screen center" hidden>
+      <h1>Accès refusé</h1>
+      <p class="muted">Le compte <b id="denied-email"></b> n'est pas autorisé.<br>Ajoute-le dans les règles Firestore (README, étape 4).</p>
+      <button id="btn-denied-logout" class="btn">Changer de compte</button>
+    </div>
+
+    <!-- LISTES -->
+    <section id="v-listes" class="view" hidden>
+      <div class="chips-row">
+        <div id="list-chips" class="chips"></div>
+      </div>
+      <div id="list-body">
+        <form id="add-item" class="add-bar" autocomplete="off">
+          <input id="item-input" placeholder="Ajouter un article…" enterkeyhint="done" maxlength="200">
+          <button class="add-btn" aria-label="Ajouter">
+            <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+          </button>
+        </form>
+        <ul id="items" class="items"></ul>
+        <div id="done-section"></div>
+      </div>
+      <div id="lists-empty" class="empty" hidden>
+        <div class="empty-emoji">🛒</div>
+        <p>Aucune liste pour l'instant.</p>
+        <button class="btn primary" data-create-list="Épicerie">Créer la liste « Épicerie »</button>
+        <button class="btn" data-create-list="">Autre liste…</button>
+      </div>
+    </section>
+
+    <!-- NOTES -->
+    <section id="v-notes" class="view" hidden>
+      <div id="notes-grid" class="notes-grid"></div>
+      <div id="notes-empty" class="empty" hidden>
+        <div class="empty-emoji">📝</div>
+        <p>Pas encore de notes.<br>Idées cadeaux, codes Wi-Fi, recettes…</p>
+      </div>
+      <button class="fab" id="fab-note" aria-label="Nouvelle note">
+        <svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+      </button>
+    </section>
+
+    <!-- FACTURES -->
+    <section id="v-factures" class="view" hidden>
+      <div id="bills-summary" class="summary"></div>
+      <div id="bills-list"></div>
+      <div id="bills-empty" class="empty" hidden>
+        <div class="empty-emoji">💸</div>
+        <p>Aucune facture.<br>Ajoutez Hydro, internet, loyer… et recevez un rappel avant l'échéance.</p>
+      </div>
+      <button class="fab" id="fab-bill" aria-label="Nouvelle facture">
+        <svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
+      </button>
+    </section>
+  </main>
+
+  <nav id="tabbar" class="tabbar" hidden>
+    <button data-tab="listes">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M3 5h2v2H3V5Zm4 0h14v2H7V5Zm-4 6h2v2H3v-2Zm4 0h14v2H7v-2Zm-4 6h2v2H3v-2Zm4 0h14v2H7v-2Z"/></svg>
+      <span>Listes</span>
+    </button>
+    <button data-tab="notes">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M5 3h10l4 4v14H5V3Zm2 2v14h10V8h-3V5H7Zm2 6h6v2H9v-2Zm0 4h6v2H9v-2Z"/></svg>
+      <span>Notes</span>
+    </button>
+    <button data-tab="factures">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M6 2h12v20l-3-2-3 2-3-2-3 2V2Zm2 2v14.3l1-.7 3 2 3-2 1 .7V4H8Zm2 3h4v2h-4V7Zm0 4h4v2h-4v-2Z"/></svg>
+      <span>Factures</span>
+      <b id="bills-badge" class="badge" hidden></b>
+    </button>
+  </nav>
+
+  <div id="sheet" class="sheet" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

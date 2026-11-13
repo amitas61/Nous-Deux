@@ -1,0 +1,21 @@
+{
+  "name": "Nous deux",
+  "short_name": "Nous deux",
+  "description": "Nos listes, nos notes et nos factures, ensemble.",
+  "lang": "fr-CA",
+  "start_url": "./#listes",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f3ec",
+  "theme_color": "#2f5d50",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Listes", "url": "./#listes", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Factures", "url": "./#factures", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
