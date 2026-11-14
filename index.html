@@ -100,6 +100,19 @@
         <svg viewBox="0 0 24 24" width="26" height="26"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
       </button>
     </section>
+    <!-- FILMS -->
+    <section id="v-films" class="view" hidden>
+      <form id="film-search-form" class="add-bar search" autocomplete="off">
+        <svg viewBox="0 0 24 24" width="20" height="20" class="muted"><path fill="currentColor" d="M15.5 14h-.79l-.28-.27A6.5 6.5 0 1 0 9.5 16a6.47 6.47 0 0 0 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5Zm-6 0C7 14 5 12 5 9.5S7 5 9.5 5 14 7 14 9.5 12 14 9.5 14Z"/></svg>
+        <input id="film-search" type="search" placeholder="Chercher un film ou une série…" enterkeyhint="search">
+      </form>
+      <div id="film-results" class="film-results" hidden></div>
+      <div class="seg" id="films-seg"></div>
+      <button id="btn-pick" class="shop-btn pick-btn" hidden><span>🎲 On regarde quoi ce soir ?</span><b>Surprends-nous</b></button>
+      <div id="films-grid" class="films-grid"></div>
+      <div id="films-empty" class="empty" hidden></div>
+      <p class="tmdb-credit">Ce produit utilise l'API TMDB mais n'est ni approuvé ni certifié par TMDB.</p>
+    </section>
   </main>
 
   <nav id="tabbar" class="tabbar" hidden>
@@ -115,6 +128,10 @@
       <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M6 2h12v20l-3-2-3 2-3-2-3 2V2Zm2 2v14.3l1-.7 3 2 3-2 1 .7V4H8Zm2 3h4v2h-4V7Zm0 4h4v2h-4v-2Z"/></svg>
       <span>Factures</span>
       <b id="bills-badge" class="badge" hidden></b>
+    </button>
+    <button data-tab="films">
+      <svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M4 4h2l2 3h3L9 4h2l2 3h3l-2-3h2l2 3h3V4h0v16H2V4h2Zm-0 5v9h16V9H4Z"/></svg>
+      <span>Films</span>
     </button>
   </nav>
 

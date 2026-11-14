@@ -66,8 +66,9 @@ function timeAgo(t) {
 
 // ───────────────────────── état ─────────────────────────
 const state = {
-  lists: [], items: [], notes: [], bills: [], payments: [], profiles: [], freq: [], catmap: [], pings: [],
-  loaded: { lists: false, items: false, notes: false, bills: false, payments: false, profiles: false, freq: false, catmap: false, pings: false },
+  lists: [], items: [], notes: [], bills: [], payments: [], profiles: [], freq: [], catmap: [], pings: [], movies: [],
+  loaded: { lists: false, items: false, notes: false, bills: false, payments: false, profiles: false, freq: false, catmap: false, pings: false, movies: false },
+  filmView: 'towatch',
   billView: ls.get('nd-billview', 'due'),
   bilanMonth: todayISO().slice(0, 7),
   tab: 'listes',
@@ -104,6 +105,11 @@ function demoStore() {
       freq: [['Lait 2 %', 9, 'laitier'], ['Bananes', 7, 'fruits'], ['Œufs', 6, 'laitier'], ['Pain tranché', 6, 'pain'], ['Café', 4, 'epicerie'], ['Yogourt grec', 4, 'laitier'], ['Poulet', 3, 'viande'], ['Papier de toilette', 2, 'hygiene']]
         .map(([text, count, cat], i) => ({ id: docId(itemKey(text)), text, count, cat, last: now() - i * 86400000 })),
       catmap: [],
+      movies: [
+        { id: uid(), tmdbId: 27205, type: 'movie', title: 'Inception', year: '2010', poster: null, overview: 'Dom Cobb est un voleur expérimenté dans l\'art périlleux de l\'extraction.', rating: 8.4, status: 'towatch', addedBy: 'elle@demo', addedAt: now() - 5000, votes: {} },
+        { id: uid(), tmdbId: 1396, type: 'tv', title: 'Breaking Bad', year: '2008', poster: null, overview: 'Un professeur de chimie se lance dans la fabrication de méthamphétamine.', rating: 8.9, status: 'towatch', addedBy: 'toi@demo', addedAt: now() - 9000, votes: {} },
+        { id: uid(), tmdbId: 120, type: 'movie', title: 'Le Seigneur des anneaux', year: '2001', poster: null, overview: '', rating: 8.4, status: 'seen', seenAt: now() - 86400000, addedBy: 'toi@demo', addedAt: now() - 99999, votes: { 'toi@demo': 1, 'elle@demo': -1 } }
+      ],
       pings: [{ id: 'elle@demo', at: now() - 4 * 60000, listName: 'Épicerie', done: false }],
       payments: [
         { id: uid(), billId: 'x1', name: 'Loyer', amount: 1250, date: addDays(t, -10), paidBy: 'toi@demo', owner: 'shared', shares: { 'toi@demo': 0.5, 'elle@demo': 0.5 }, createdAt: now() - 3 },
@@ -194,14 +200,14 @@ function show(id) {
   const inApp = id === null;
   $('#tabbar').hidden = !inApp;
   $('#btn-settings').hidden = !inApp;
-  ['listes', 'notes', 'factures'].forEach((t) => ($('#v-' + t).hidden = !inApp || state.tab !== t));
+  ['listes', 'notes', 'factures', 'films'].forEach((t) => ($('#v-' + t).hidden = !inApp || state.tab !== t));
 }
 
 async function main() {
   registerSW();
   wireStatic();
   const h = location.hash.slice(1);
-  if (['listes', 'notes', 'factures'].includes(h)) state.tab = h;
+  if (['listes', 'notes', 'factures', 'films'].includes(h)) state.tab = h;
 
   if (DEMO) {
     state.me = { name: 'Toi', email: 'toi@demo' };
@@ -273,7 +279,7 @@ function startApp() {
       show('#screen-denied');
     } else banner('Problème de synchronisation : ' + esc(err.code || err.message));
   };
-  for (const col of ['lists', 'items', 'notes', 'bills', 'payments', 'freq', 'catmap', 'pings']) {
+  for (const col of ['lists', 'items', 'notes', 'bills', 'payments', 'freq', 'catmap', 'pings', 'movies']) {
     store.subscribe(col, (rows) => { state[col] = rows; state.loaded[col] = true; render(col); }, onErr);
   }
   store.subscribe('profiles', (rows, meta) => { state.loaded.profiles = true; onProfiles(rows, meta); }, onErr);
@@ -317,7 +323,7 @@ function wireStatic() {
   $$('#tabbar button').forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
   window.addEventListener('hashchange', () => {
     const h = location.hash.slice(1);
-    if (['listes', 'notes', 'factures'].includes(h) && h !== state.tab) setTab(h, true);
+    if (['listes', 'notes', 'factures', 'films'].includes(h) && h !== state.tab) setTab(h, true);
   });
 
   // Listes
@@ -330,6 +336,7 @@ function wireStatic() {
     addItem(text);
   };
   $('#btn-shop').onclick = startShopping;
+  wireFilms();
   wireLongPress($('#v-listes'));
   $('#lists-empty').addEventListener('click', (e) => {
     const b = e.target.closest('[data-create-list]');
@@ -348,7 +355,7 @@ function banner(html) { const b = $('#banner'); b.innerHTML = html; b.hidden = f
 function setTab(tab, noHash) {
   state.tab = tab;
   $$('#tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.tab === tab));
-  ['listes', 'notes', 'factures'].forEach((t) => ($('#v-' + t).hidden = t !== tab));
+  ['listes', 'notes', 'factures', 'films'].forEach((t) => ($('#v-' + t).hidden = t !== tab));
   if (!noHash || location.hash.slice(1) !== tab) history.replaceState(history.state, '', '#' + tab);
   window.scrollTo(0, 0);
 }
@@ -356,6 +363,7 @@ function setTab(tab, noHash) {
 function render(col) {
   if (['lists', 'items', 'freq', 'catmap', 'pings'].includes(col)) renderLists();
   if (col === 'notes') renderNotes();
+  if (col === 'movies') renderFilms();
   if (col === 'bills' || col === 'payments') renderBills();
 }
 
@@ -898,6 +906,7 @@ function onProfiles(rows, meta) {
   if (mine && mine.name) state.me.name = mine.name;
   else if (!meta?.fromCache && !askedName && state.me.email) { askedName = true; nameSheet(true); }
   renderBills();
+  renderFilms();
 }
 let askedName = false;
 function nameSheet(first) {
@@ -1241,6 +1250,220 @@ function billSheet(b) {
     close();
     if (await confirmSheet(`Supprimer « ${b.name} » ?`, 'Les paiements déjà faits restent dans le bilan.', 'Supprimer')) write(store.remove('bills', b.id));
   };
+}
+
+// ───────────────────────── FILMS (TMDB) ─────────────────────────
+// Données : The Movie Database (TMDB). « Ce produit utilise l'API TMDB mais n'est ni approuvé ni certifié par TMDB. »
+const TMDB_KEY = self.TMDB_KEY || '';
+const TMDB_IMG = 'https://image.tmdb.org/t/p/';
+const DEMO_MOVIES = [
+  { id: 438631, media_type: 'movie', title: 'Dune', release_date: '2021-09-15', vote_average: 7.8, overview: "Paul Atréides, jeune homme brillant au destin hors du commun, doit se rendre sur la planète la plus dangereuse de l'univers.", poster_path: null },
+  { id: 693134, media_type: 'movie', title: 'Dune : Deuxième partie', release_date: '2024-02-27', vote_average: 8.2, overview: "Paul Atréides s'unit à Chani et aux Fremen pour mener la révolte.", poster_path: null },
+  { id: 1396, media_type: 'tv', name: 'Breaking Bad', first_air_date: '2008-01-20', vote_average: 8.9, overview: 'Un professeur de chimie atteint d\'un cancer se lance dans la fabrication de méthamphétamine.', poster_path: null },
+  { id: 27205, media_type: 'movie', title: 'Inception', release_date: '2010-07-15', vote_average: 8.4, overview: 'Dom Cobb est un voleur expérimenté dans l\'art périlleux de l\'extraction.', poster_path: null }
+];
+
+async function tmdb(path, params = {}) {
+  if (!TMDB_KEY) throw new Error('nokey');
+  const url = new URL('https://api.themoviedb.org/3' + path);
+  Object.entries({ language: 'fr-CA', ...params }).forEach(([k, v]) => url.searchParams.set(k, v));
+  const headers = {};
+  if (TMDB_KEY.startsWith('eyJ')) headers.Authorization = 'Bearer ' + TMDB_KEY; // jeton « lecture » (v4)
+  else url.searchParams.set('api_key', TMDB_KEY);                               // clé classique (v3)
+  const r = await fetch(url, { headers });
+  if (!r.ok) throw new Error('tmdb ' + r.status);
+  return r.json();
+}
+
+function poster(path, size = 'w185') {
+  return path ? `<img src="${TMDB_IMG}${size}${esc(path)}" alt="" loading="lazy">` : `<div class="noposter">🎬</div>`;
+}
+const mTitle = (r) => r.title || r.name || '';
+const mYear = (r) => String(r.release_date || r.first_air_date || '').slice(0, 4);
+
+function renderFilms() {
+  const v = $('#v-films');
+  if (!v) return;
+  const view = state.filmView;
+  const all = state.movies;
+  const towatch = all.filter((m) => m.status !== 'seen').sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+  const seen = all.filter((m) => m.status === 'seen').sort((a, b) => (b.seenAt || 0) - (a.seenAt || 0));
+  const list = view === 'seen' ? seen : towatch;
+
+  $('#films-seg').innerHTML = `
+    <button data-fview="towatch" class="${view !== 'seen' ? 'on' : ''}">À voir${towatch.length ? ` (${towatch.length})` : ''}</button>
+    <button data-fview="seen" class="${view === 'seen' ? 'on' : ''}">Vus${seen.length ? ` (${seen.length})` : ''}</button>`;
+  $('#btn-pick').hidden = view === 'seen' || towatch.length < 2;
+
+  const me = keyOf(state.me.email);
+  $('#films-grid').innerHTML = list.map((m) => {
+    const votes = Object.entries(m.votes || {}).filter(([, v]) => v);
+    return `
+      <button class="film" data-mid="${esc(m.id)}">
+        <div class="pst">${poster(m.poster)}<span class="type">${m.type === 'tv' ? 'Série' : 'Film'}</span>${m.rating ? `<span class="rate">★ ${Number(m.rating).toFixed(1)}</span>` : ''}</div>
+        <div class="ft">${esc(m.title)}</div>
+        <div class="fs">${esc(m.year || '')}${view === 'seen' && votes.length ? ' · ' + votes.map(([e, v]) => `${esc(nameOf(e).charAt(0))}${v > 0 ? '👍' : '👎'}`).join(' ') : (m.addedBy && m.addedBy !== me ? ' · par ' + esc(nameOf(m.addedBy)) : '')}</div>
+      </button>`;
+  }).join('');
+  $('#films-empty').hidden = list.length > 0;
+  $('#films-empty').innerHTML = view === 'seen'
+    ? '<div class="empty-emoji">🍿</div><p>Aucun film vu pour l\'instant.</p>'
+    : `<div class="empty-emoji">🎬</div><p>Cherchez un film ou une série ci-dessus<br>pour l'ajouter à votre liste « À voir ».</p>${TMDB_KEY || DEMO ? '' : '<p class="error">Clé TMDB manquante dans config.js (voir le guide).</p>'}`;
+}
+
+let searchTimer = null, searchSeq = 0;
+function wireFilms() {
+  const input = $('#film-search');
+  const box = $('#film-results');
+  input.addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    const q = input.value.trim();
+    if (q.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
+    searchTimer = setTimeout(() => runSearch(q), 350);
+  });
+  $('#film-search-form').onsubmit = (e) => { e.preventDefault(); const q = input.value.trim(); if (q) runSearch(q); input.blur(); };
+  box.onclick = (e) => {
+    const b = e.target.closest('[data-add]');
+    const row = e.target.closest('[data-res]');
+    if (!row) return;
+    const r = lastResults[Number(row.dataset.res)];
+    if (b) { addMovie(r); b.textContent = '✓ Ajouté'; b.disabled = true; }
+    else filmDetail(null, r);
+  };
+  $('#films-seg').onclick = (e) => {
+    const b = e.target.closest('[data-fview]');
+    if (b) { state.filmView = b.dataset.fview; renderFilms(); }
+  };
+  $('#films-grid').onclick = (e) => {
+    const c = e.target.closest('[data-mid]');
+    if (c) filmDetail(state.movies.find((m) => m.id === c.dataset.mid));
+  };
+  $('#btn-pick').onclick = pickMovie;
+  document.addEventListener('click', (e) => { if (!e.target.closest('#film-search-form, #film-results')) { box.hidden = true; } });
+  input.addEventListener('focus', () => { if (box.innerHTML) box.hidden = false; });
+}
+
+let lastResults = [];
+async function runSearch(q) {
+  const seq = ++searchSeq;
+  const box = $('#film-results');
+  box.hidden = false;
+  box.innerHTML = '<div class="res-msg">Recherche…</div>';
+  let results;
+  try {
+    if (!TMDB_KEY && DEMO) results = DEMO_MOVIES.filter((m) => norm(mTitle(m)).includes(norm(q)));
+    else results = ((await tmdb('/search/multi', { query: q, include_adult: 'false', region: 'CA' })).results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv');
+  } catch (e) {
+    if (seq !== searchSeq) return;
+    box.innerHTML = `<div class="res-msg error">${e.message === 'nokey' ? 'Clé TMDB manquante dans config.js (voir le guide).' : 'Recherche impossible. Vérifie la connexion ou la clé TMDB.'}</div>`;
+    return;
+  }
+  if (seq !== searchSeq) return;
+  lastResults = results.slice(0, 12);
+  const have = new Set(state.movies.map((m) => m.type + ':' + m.tmdbId));
+  box.innerHTML = lastResults.length ? lastResults.map((r, i) => `
+    <div class="res" data-res="${i}">
+      <div class="rp">${poster(r.poster_path, 'w92')}</div>
+      <div class="ri"><b>${esc(mTitle(r))}</b><span>${r.media_type === 'tv' ? 'Série' : 'Film'}${mYear(r) ? ' · ' + mYear(r) : ''}${r.vote_average ? ' · ★ ' + r.vote_average.toFixed(1) : ''}</span></div>
+      ${have.has(r.media_type + ':' + r.id) ? '<button class="btn small" disabled>✓ Déjà là</button>' : '<button class="btn small primary" data-add>+ À voir</button>'}
+    </div>`).join('') + '<div class="tmdb-credit">Données : TMDB</div>' : '<div class="res-msg">Aucun résultat.</div>';
+}
+
+function addMovie(r) {
+  const doc = {
+    tmdbId: r.id, type: r.media_type === 'tv' ? 'tv' : 'movie', title: mTitle(r), year: mYear(r),
+    poster: r.poster_path || null, overview: String(r.overview || '').slice(0, 1200), rating: r.vote_average || null,
+    status: 'towatch', addedBy: keyOf(state.me.email), addedAt: now(), votes: {}
+  };
+  write(store.add('movies', doc));
+  toast(`« ${doc.title} » ajouté à À voir ✓`);
+}
+
+async function filmDetail(m, r) {
+  // m : film de notre liste ; r : résultat de recherche pas encore ajouté
+  const data = m || { tmdbId: r.id, type: r.media_type === 'tv' ? 'tv' : 'movie', title: mTitle(r), year: mYear(r), poster: r.poster_path, overview: r.overview, rating: r.vote_average };
+  const me = keyOf(state.me.email);
+  const myVote = m?.votes?.[me] || 0;
+  const close = openSheet(`
+    <div class="fd">
+      <div class="fd-top">
+        <div class="fd-p">${poster(data.poster, 'w342')}</div>
+        <div>
+          <h2>${esc(data.title)}</h2>
+          <p class="muted">${data.type === 'tv' ? 'Série' : 'Film'}${data.year ? ' · ' + esc(data.year) : ''}${data.rating ? ' · ★ ' + Number(data.rating).toFixed(1) : ''}</p>
+          <div id="fd-extra" class="muted tiny">…</div>
+        </div>
+      </div>
+      ${data.overview ? `<p class="fd-ov">${esc(data.overview)}</p>` : ''}
+      <div id="fd-where"></div>
+      ${m && m.status === 'seen' ? `
+        <div class="fd-votes"><span>Ton avis :</span>
+          <button data-vote="1" class="${myVote > 0 ? 'sel' : ''}">👍 Aimé</button>
+          <button data-vote="-1" class="${myVote < 0 ? 'sel' : ''}">👎 Bof</button>
+        </div>
+        ${Object.entries(m.votes || {}).filter(([e, v]) => e !== me && v).map(([e, v]) => `<p class="muted tiny">${esc(nameOf(e))} : ${v > 0 ? '👍 a aimé' : '👎 bof'}</p>`).join('')}` : ''}
+      <div class="actions">
+        ${m ? `<button class="btn danger" id="fd-del">Retirer</button><span class="spacer"></span>
+               ${m.status === 'seen' ? '<button class="btn" id="fd-unseen">↺ À revoir</button>' : '<button class="btn primary" id="fd-seen">✓ On l\'a vu</button>'}`
+            : `<span class="spacer"></span><button class="btn primary" id="fd-add">+ À voir</button>`}
+      </div>
+      <p class="tmdb-credit">Ce produit utilise l'API TMDB mais n'est ni approuvé ni certifié par TMDB. Diffusion : JustWatch.</p>
+    </div>`);
+  if (m) {
+    $('#fd-del').onclick = async () => { close(); if (await confirmSheet(`Retirer « ${m.title} » ?`, '', 'Retirer')) write(store.remove('movies', m.id)); };
+    $('#fd-seen') && ($('#fd-seen').onclick = () => { write(store.update('movies', m.id, { status: 'seen', seenAt: now() })); close(); toast('Bon film ? Donne ton avis dans « Vus » 🍿'); });
+    $('#fd-unseen') && ($('#fd-unseen').onclick = () => { write(store.update('movies', m.id, { status: 'towatch', seenAt: null })); close(); });
+    $$('#sheet [data-vote]').forEach((b) => (b.onclick = () => {
+      const v = Number(b.dataset.vote);
+      write(store.update('movies', m.id, { votes: { ...(m.votes || {}), [me]: myVote === v ? 0 : v } }));
+      close();
+    }));
+  } else $('#fd-add').onclick = () => { addMovie(r); close(); };
+
+  // Détails : durée / saisons, genres, où regarder au Canada.
+  if (!TMDB_KEY) { $('#fd-extra').textContent = ''; return; }
+  try {
+    const [det, prov] = await Promise.all([
+      tmdb(`/${data.type}/${data.tmdbId}`),
+      tmdb(`/${data.type}/${data.tmdbId}/watch/providers`).catch(() => null)
+    ]);
+    const ex = $('#fd-extra'); if (!ex) return;
+    const bits = [];
+    if (det.runtime) bits.push(`${Math.floor(det.runtime / 60)} h ${String(det.runtime % 60).padStart(2, '0')}`);
+    if (det.number_of_seasons) bits.push(`${det.number_of_seasons} saison${det.number_of_seasons > 1 ? 's' : ''}`);
+    if (det.genres?.length) bits.push(det.genres.slice(0, 3).map((g) => g.name).join(', '));
+    ex.textContent = bits.join(' · ');
+    const ca = prov?.results?.CA;
+    const subs = ca?.flatrate || [];
+    const rent = [...(ca?.rent || []), ...(ca?.buy || [])].filter((p, i, a) => a.findIndex((x) => x.provider_id === p.provider_id) === i);
+    const where = $('#fd-where'); if (!where) return;
+    where.innerHTML = (subs.length || rent.length) ? `
+      ${subs.length ? `<div class="where"><span>📺 Inclus avec</span>${subs.slice(0, 6).map((p) => `<span class="prov"><img src="${TMDB_IMG}w45${esc(p.logo_path)}" alt="">${esc(p.provider_name)}</span>`).join('')}</div>` : ''}
+      ${rent.length ? `<div class="where"><span>💳 Location / achat</span>${rent.slice(0, 4).map((p) => `<span class="prov"><img src="${TMDB_IMG}w45${esc(p.logo_path)}" alt="">${esc(p.provider_name)}</span>`).join('')}</div>` : ''}`
+      : '<p class="muted tiny">Pas offert en diffusion au Canada pour l\'instant.</p>';
+  } catch { const ex = $('#fd-extra'); if (ex) ex.textContent = ''; }
+}
+
+function pickMovie() {
+  const pool = state.movies.filter((m) => m.status !== 'seen');
+  if (!pool.length) return;
+  let last = null;
+  const show = () => {
+    let m;
+    do { m = pool[Math.floor(Math.random() * pool.length)]; } while (pool.length > 1 && m === last);
+    last = m;
+    const close = openSheet(`
+      <div class="pick">
+        <p class="muted">Ce soir, on regarde…</p>
+        <div class="pick-p">${poster(m.poster, 'w342')}</div>
+        <h2>${esc(m.title)}</h2>
+        <p class="muted">${m.type === 'tv' ? 'Série' : 'Film'}${m.year ? ' · ' + esc(m.year) : ''}</p>
+        <div class="actions" style="justify-content:center"><button class="btn" id="pk-again">🎲 Un autre</button><button class="btn primary" id="pk-ok">🍿 Parfait !</button></div>
+      </div>`);
+    $('#pk-again').onclick = () => { close(); setTimeout(show, 80); };
+    $('#pk-ok').onclick = () => { close(); filmDetail(m); };
+  };
+  show();
 }
 
 // ───────────────────────── réglages & notifications ─────────────────────────

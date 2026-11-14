@@ -1,7 +1,7 @@
 // Service worker : fonctionnement hors ligne + notifications de factures.
 importScripts('./config.js');
 
-const CACHE = 'nous-deux-v6';
+const CACHE = 'nous-deux-v7';
 const ASSETS = [
   './', './index.html', './app.js', './styles.css', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/badge-96.png'
