@@ -16,3 +16,4 @@ self.FIREBASE_CONFIG = {
 // Clé « Web Push » (Firebase › Paramètres du projet › Cloud Messaging ›
 // Certificats Web Push › Paire de clés). Nécessaire pour les notifications.
 self.VAPID_KEY = "BFEtet6glvWlYdqcKFxnCDbpUJmdc7sZIiLgC0TD0MZ-N6ERo8weo6RvAtR2rRU1hq-lEPbx56kpPH5He4f2Lvw";
+self.TMDB_KEY = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJiOTk4MWU5ZmYwYWM5MGY0YWExYTAxZmFjNGY4NWI3MiIsIm5iZiI6MTc5NDY3NjczMy45NjMsInN1YiI6IjZhZjg5N2ZkOGQwNTEzYzNmNzZjYzJhMSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.zS4rFLSeLwBhZmMeWEGduPYUDrKuNh74f4z92vrzQJE";
