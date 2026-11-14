@@ -69,6 +69,8 @@ const state = {
   lists: [], items: [], notes: [], bills: [], payments: [], profiles: [], freq: [], catmap: [], pings: [], movies: [],
   loaded: { lists: false, items: false, notes: false, bills: false, payments: false, profiles: false, freq: false, catmap: false, pings: false, movies: false },
   filmView: 'towatch',
+  filmSource: ls.get('nd-filmsrc', 'tmdb'),
+  filmType: 'all',
   billView: ls.get('nd-billview', 'due'),
   bilanMonth: todayISO().slice(0, 7),
   tab: 'listes',
@@ -1275,40 +1277,93 @@ async function tmdb(path, params = {}) {
   return r.json();
 }
 
+// ── AniList (anime) : gratuit pour usage non commercial, sans clé ──
+const ANI_FIELDS = `id title { romaji english } format episodes status seasonYear averageScore
+  coverImage { large } description(asHtml: false) genres nextAiringEpisode { episode airingAt }
+  studios(isMain: true) { nodes { name } }`;
+async function anilist(query, variables) {
+  const r = await fetch('https://graphql.anilist.co', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ query, variables })
+  });
+  if (r.status === 429) throw new Error('ratelimit');
+  if (!r.ok) throw new Error('anilist ' + r.status);
+  const out = await r.json();
+  if (out.errors) throw new Error('anilist');
+  return out.data;
+}
+const ANI_FORMAT = { TV: 'Série', TV_SHORT: 'Série courte', MOVIE: 'Film', OVA: 'OVA', ONA: 'ONA', SPECIAL: 'Spécial', MUSIC: 'Clip' };
+const ANI_STATUS = { RELEASING: 'En diffusion', FINISHED: 'Terminé', NOT_YET_RELEASED: 'À venir', HIATUS: 'En pause', CANCELLED: 'Annulé' };
+const aniTitle = (a) => a.title?.english || a.title?.romaji || '';
+const stripHtml = (s) => String(s || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').replace(/&quot;/g, '"').replace(/&#039;/g, "'").replace(/&amp;/g, '&').replace(/\n{3,}/g, '\n\n').trim();
+const DEMO_ANIME = [
+  { id: 154587, title: { english: "Frieren: Beyond Journey's End", romaji: 'Sousou no Frieren' }, format: 'TV', episodes: 28, status: 'FINISHED', seasonYear: 2023, averageScore: 90, coverImage: { large: null }, description: 'The adventure is over but life goes on for an elf mage.', genres: ['Adventure', 'Drama', 'Fantasy'], nextAiringEpisode: null, studios: { nodes: [{ name: 'Madhouse' }] } },
+  { id: 21, title: { english: 'ONE PIECE', romaji: 'ONE PIECE' }, format: 'TV', episodes: null, status: 'RELEASING', seasonYear: 1999, averageScore: 88, coverImage: { large: null }, description: 'Gold Roger was known as the Pirate King…', genres: ['Action', 'Adventure'], nextAiringEpisode: { episode: 1152, airingAt: Math.floor(Date.now() / 1000) + 2 * 86400 + 3600 }, studios: { nodes: [{ name: 'Toei Animation' }] } }
+];
+const fmtAir = new Intl.DateTimeFormat('fr-CA', { weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+function airingText(next) {
+  if (!next) return '';
+  const ms = next.airingAt * 1000 - now();
+  const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000);
+  const when = ms < 3600000 ? 'dans moins d\'une heure' : d >= 1 ? `dans ${d} j${h ? ` ${h} h` : ''}` : `dans ${h} h`;
+  return `📅 Épisode ${next.episode} ${when} · ${fmtAir.format(new Date(next.airingAt * 1000))}`;
+}
+
 function poster(path, size = 'w185') {
-  return path ? `<img src="${TMDB_IMG}${size}${esc(path)}" alt="" loading="lazy">` : `<div class="noposter">🎬</div>`;
+  if (!path) return `<div class="noposter">🎬</div>`;
+  const src = /^https?:/.test(path) ? path : TMDB_IMG + size + path; // AniList : adresse complète
+  return `<img src="${esc(src)}" alt="" loading="lazy">`;
 }
 const mTitle = (r) => r.title || r.name || '';
 const mYear = (r) => String(r.release_date || r.first_air_date || '').slice(0, 4);
+const typeLabel = (m) => (m.type === 'anime' ? 'Anime' : m.type === 'tv' ? 'Série' : 'Film');
 
 function renderFilms() {
   const v = $('#v-films');
   if (!v) return;
   const view = state.filmView;
+  const ft = state.filmType;
   const all = state.movies;
-  const towatch = all.filter((m) => m.status !== 'seen').sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
-  const seen = all.filter((m) => m.status === 'seen').sort((a, b) => (b.seenAt || 0) - (a.seenAt || 0));
+  const typed = all.filter((m) => ft === 'all' || m.type === ft);
+  const towatch = typed.filter((m) => m.status !== 'seen').sort((a, b) => ((b.progress > 0) - (a.progress > 0)) || (b.addedAt || 0) - (a.addedAt || 0));
+  const seen = typed.filter((m) => m.status === 'seen').sort((a, b) => (b.seenAt || 0) - (a.seenAt || 0));
   const list = view === 'seen' ? seen : towatch;
+
+  $('#film-source').innerHTML = `
+    <button data-src="tmdb" class="${state.filmSource !== 'anime' ? 'on' : ''}">🎬 Films & séries</button>
+    <button data-src="anime" class="${state.filmSource === 'anime' ? 'on' : ''}">🍥 Anime</button>`;
+  $('#film-search').placeholder = state.filmSource === 'anime' ? 'Chercher un anime…' : 'Chercher un film ou une série…';
 
   $('#films-seg').innerHTML = `
     <button data-fview="towatch" class="${view !== 'seen' ? 'on' : ''}">À voir${towatch.length ? ` (${towatch.length})` : ''}</button>
     <button data-fview="seen" class="${view === 'seen' ? 'on' : ''}">Vus${seen.length ? ` (${seen.length})` : ''}</button>`;
+  const hasTypes = new Set(all.map((m) => m.type)).size > 1;
+  $('#film-types').hidden = !hasTypes;
+  $('#film-types').innerHTML = [['all', 'Tout'], ['movie', 'Films'], ['tv', 'Séries'], ['anime', 'Anime']]
+    .map(([k, l]) => `<button class="chip small ${ft === k ? 'active' : ''}" data-ftype="${k}">${l}</button>`).join('');
   $('#btn-pick').hidden = view === 'seen' || towatch.length < 2;
 
   const me = keyOf(state.me.email);
   $('#films-grid').innerHTML = list.map((m) => {
-    const votes = Object.entries(m.votes || {}).filter(([, v]) => v);
+    const votes = Object.entries(m.votes || {}).filter(([, x]) => x);
+    const prog = m.type === 'anime' && m.progress > 0 && view !== 'seen'
+      ? `<div class="prog"><span style="width:${m.episodes ? Math.min(100, (m.progress / m.episodes) * 100) : 30}%"></span></div>` : '';
+    const sub = view === 'seen' && votes.length
+      ? votes.map(([e, x]) => `${esc(nameOf(e).charAt(0))}${x > 0 ? '👍' : '👎'}`).join(' ')
+      : m.type === 'anime' && m.progress > 0 ? `Ép. ${m.progress}${m.episodes ? '/' + m.episodes : ''}`
+      : (m.addedBy && m.addedBy !== me ? 'par ' + esc(nameOf(m.addedBy)) : '');
     return `
       <button class="film" data-mid="${esc(m.id)}">
-        <div class="pst">${poster(m.poster)}<span class="type">${m.type === 'tv' ? 'Série' : 'Film'}</span>${m.rating ? `<span class="rate">★ ${Number(m.rating).toFixed(1)}</span>` : ''}</div>
+        <div class="pst">${poster(m.poster)}<span class="type ${m.type === 'anime' ? 'ani' : ''}">${typeLabel(m)}</span>${m.rating ? `<span class="rate">★ ${Number(m.rating).toFixed(1)}</span>` : ''}${prog}</div>
         <div class="ft">${esc(m.title)}</div>
-        <div class="fs">${esc(m.year || '')}${view === 'seen' && votes.length ? ' · ' + votes.map(([e, v]) => `${esc(nameOf(e).charAt(0))}${v > 0 ? '👍' : '👎'}`).join(' ') : (m.addedBy && m.addedBy !== me ? ' · par ' + esc(nameOf(m.addedBy)) : '')}</div>
+        <div class="fs">${esc(m.year || '')}${sub ? ' · ' + sub : ''}</div>
       </button>`;
   }).join('');
   $('#films-empty').hidden = list.length > 0;
   $('#films-empty').innerHTML = view === 'seen'
-    ? '<div class="empty-emoji">🍿</div><p>Aucun film vu pour l\'instant.</p>'
-    : `<div class="empty-emoji">🎬</div><p>Cherchez un film ou une série ci-dessus<br>pour l'ajouter à votre liste « À voir ».</p>${TMDB_KEY || DEMO ? '' : '<p class="error">Clé TMDB manquante dans config.js (voir le guide).</p>'}`;
+    ? '<div class="empty-emoji">🍿</div><p>Rien de vu ici pour l\'instant.</p>'
+    : `<div class="empty-emoji">${ft === 'anime' ? '🍥' : '🎬'}</div><p>Cherchez ${ft === 'anime' ? 'un anime' : 'un film, une série ou un anime'} ci-dessus<br>pour l'ajouter à « À voir ».</p>${TMDB_KEY || DEMO || state.filmSource === 'anime' ? '' : '<p class="error">Clé TMDB manquante dans config.js (voir le guide).</p>'}`;
 }
 
 let searchTimer = null, searchSeq = 0;
@@ -1319,7 +1374,7 @@ function wireFilms() {
     clearTimeout(searchTimer);
     const q = input.value.trim();
     if (q.length < 2) { box.hidden = true; box.innerHTML = ''; return; }
-    searchTimer = setTimeout(() => runSearch(q), 350);
+    searchTimer = setTimeout(() => runSearch(q), state.filmSource === 'anime' ? 600 : 350);
   });
   $('#film-search-form').onsubmit = (e) => { e.preventDefault(); const q = input.value.trim(); if (q) runSearch(q); input.blur(); };
   box.onclick = (e) => {
@@ -1330,6 +1385,19 @@ function wireFilms() {
     if (b) { addMovie(r); b.textContent = '✓ Ajouté'; b.disabled = true; }
     else filmDetail(null, r);
   };
+  $('#film-source').onclick = (e) => {
+    const b = e.target.closest('[data-src]');
+    if (!b || b.dataset.src === state.filmSource) return;
+    state.filmSource = b.dataset.src; ls.set('nd-filmsrc', state.filmSource);
+    renderFilms();
+    box.hidden = true; box.innerHTML = '';
+    if (input.value.trim().length >= 2) runSearch(input.value.trim());
+    input.focus();
+  };
+  $('#film-types').onclick = (e) => {
+    const b = e.target.closest('[data-ftype]');
+    if (b) { state.filmType = b.dataset.ftype; renderFilms(); }
+  };
   $('#films-seg').onclick = (e) => {
     const b = e.target.closest('[data-fview]');
     if (b) { state.filmView = b.dataset.fview; renderFilms(); }
@@ -1339,49 +1407,71 @@ function wireFilms() {
     if (c) filmDetail(state.movies.find((m) => m.id === c.dataset.mid));
   };
   $('#btn-pick').onclick = pickMovie;
-  document.addEventListener('click', (e) => { if (!e.target.closest('#film-search-form, #film-results')) { box.hidden = true; } });
+  document.addEventListener('click', (e) => { if (!e.target.closest('#film-search-form, #film-results, #film-source')) { box.hidden = true; } });
   input.addEventListener('focus', () => { if (box.innerHTML) box.hidden = false; });
+}
+
+// Résultat de recherche normalisé : { src, id, type, title, alt, year, poster, overview, rating, meta, raw }
+function fromTmdb(r) {
+  return { src: 'tmdb', id: r.id, type: r.media_type === 'tv' ? 'tv' : 'movie', title: mTitle(r), alt: '', year: mYear(r), poster: r.poster_path || null, overview: r.overview || '', rating: r.vote_average || null, meta: '' };
+}
+function fromAni(a) {
+  const alt = a.title?.english && a.title?.romaji && a.title.english !== a.title.romaji ? a.title.romaji : '';
+  const bits = [ANI_FORMAT[a.format] || a.format, a.seasonYear, a.episodes ? a.episodes + ' ép.' : '', ANI_STATUS[a.status] === 'En diffusion' ? 'En diffusion' : ''].filter(Boolean);
+  return { src: 'anime', id: a.id, type: 'anime', title: aniTitle(a), alt, year: a.seasonYear ? String(a.seasonYear) : '', poster: a.coverImage?.large || null, overview: stripHtml(a.description), rating: a.averageScore ? a.averageScore / 10 : null, episodes: a.episodes || null, format: a.format, meta: bits.join(' · '), raw: a };
 }
 
 let lastResults = [];
 async function runSearch(q) {
   const seq = ++searchSeq;
   const box = $('#film-results');
+  const anime = state.filmSource === 'anime';
   box.hidden = false;
   box.innerHTML = '<div class="res-msg">Recherche…</div>';
   let results;
   try {
-    if (!TMDB_KEY && DEMO) results = DEMO_MOVIES.filter((m) => norm(mTitle(m)).includes(norm(q)));
-    else results = ((await tmdb('/search/multi', { query: q, include_adult: 'false', region: 'CA' })).results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv');
+    if (anime) {
+      try {
+        const d = await anilist(`query ($q: String) { Page(perPage: 12) { media(search: $q, type: ANIME, isAdult: false, sort: SEARCH_MATCH) { ${ANI_FIELDS} } } }`, { q });
+        results = d.Page.media.map(fromAni);
+      } catch (e) {
+        if (DEMO && e.message !== 'ratelimit') results = DEMO_ANIME.filter((a) => norm(aniTitle(a) + ' ' + a.title.romaji).includes(norm(q))).map(fromAni);
+        else throw e;
+      }
+    } else if (!TMDB_KEY && DEMO) results = DEMO_MOVIES.filter((m) => norm(mTitle(m)).includes(norm(q))).map(fromTmdb);
+    else results = ((await tmdb('/search/multi', { query: q, include_adult: 'false', region: 'CA' })).results || []).filter((r) => r.media_type === 'movie' || r.media_type === 'tv').map(fromTmdb);
   } catch (e) {
     if (seq !== searchSeq) return;
-    box.innerHTML = `<div class="res-msg error">${e.message === 'nokey' ? 'Clé TMDB manquante dans config.js (voir le guide).' : 'Recherche impossible. Vérifie la connexion ou la clé TMDB.'}</div>`;
+    box.innerHTML = `<div class="res-msg error">${e.message === 'nokey' ? 'Clé TMDB manquante dans config.js (voir le guide).' : e.message === 'ratelimit' ? 'Trop de recherches d\'un coup : attends quelques secondes.' : 'Recherche impossible. Vérifie ta connexion.'}</div>`;
     return;
   }
   if (seq !== searchSeq) return;
   lastResults = results.slice(0, 12);
-  const have = new Set(state.movies.map((m) => m.type + ':' + m.tmdbId));
+  const have = new Set(state.movies.map((m) => (m.type === 'anime' ? 'anime:' + m.anilistId : m.type + ':' + m.tmdbId)));
   box.innerHTML = lastResults.length ? lastResults.map((r, i) => `
     <div class="res" data-res="${i}">
-      <div class="rp">${poster(r.poster_path, 'w92')}</div>
-      <div class="ri"><b>${esc(mTitle(r))}</b><span>${r.media_type === 'tv' ? 'Série' : 'Film'}${mYear(r) ? ' · ' + mYear(r) : ''}${r.vote_average ? ' · ★ ' + r.vote_average.toFixed(1) : ''}</span></div>
-      ${have.has(r.media_type + ':' + r.id) ? '<button class="btn small" disabled>✓ Déjà là</button>' : '<button class="btn small primary" data-add>+ À voir</button>'}
-    </div>`).join('') + '<div class="tmdb-credit">Données : TMDB</div>' : '<div class="res-msg">Aucun résultat.</div>';
+      <div class="rp">${poster(r.poster, 'w92')}</div>
+      <div class="ri"><b>${esc(r.title)}</b>${r.alt ? `<small>${esc(r.alt)}</small>` : ''}<span>${r.src === 'anime' ? esc(r.meta) : (r.type === 'tv' ? 'Série' : 'Film') + (r.year ? ' · ' + r.year : '')}${r.rating ? ' · ★ ' + r.rating.toFixed(1) : ''}</span></div>
+      ${have.has(r.type + ':' + r.id) ? '<button class="btn small" disabled>✓ Déjà là</button>' : '<button class="btn small primary" data-add>+ À voir</button>'}
+    </div>`).join('') + `<div class="tmdb-credit">Données : ${anime ? 'AniList' : 'TMDB'}</div>` : '<div class="res-msg">Aucun résultat.</div>';
 }
 
 function addMovie(r) {
-  const doc = {
-    tmdbId: r.id, type: r.media_type === 'tv' ? 'tv' : 'movie', title: mTitle(r), year: mYear(r),
-    poster: r.poster_path || null, overview: String(r.overview || '').slice(0, 1200), rating: r.vote_average || null,
-    status: 'towatch', addedBy: keyOf(state.me.email), addedAt: now(), votes: {}
-  };
+  const base = { title: r.title, year: r.year, poster: r.poster || null, overview: String(r.overview || '').slice(0, 1200), rating: r.rating || null, status: 'towatch', addedBy: keyOf(state.me.email), addedAt: now(), votes: {} };
+  const doc = r.src === 'anime'
+    ? { ...base, type: 'anime', anilistId: r.id, titleAlt: r.alt || '', episodes: r.episodes || null, format: r.format || '', progress: 0 }
+    : { ...base, type: r.type, tmdbId: r.id };
   write(store.add('movies', doc));
   toast(`« ${doc.title} » ajouté à À voir ✓`);
 }
 
 async function filmDetail(m, r) {
-  // m : film de notre liste ; r : résultat de recherche pas encore ajouté
-  const data = m || { tmdbId: r.id, type: r.media_type === 'tv' ? 'tv' : 'movie', title: mTitle(r), year: mYear(r), poster: r.poster_path, overview: r.overview, rating: r.vote_average };
+  // m : élément de notre liste ; r : résultat de recherche pas encore ajouté
+  const data = m || {
+    type: r.type, title: r.title, titleAlt: r.alt, year: r.year, poster: r.poster, overview: r.overview, rating: r.rating,
+    tmdbId: r.src === 'tmdb' ? r.id : null, anilistId: r.src === 'anime' ? r.id : null, episodes: r.episodes
+  };
+  const isAni = data.type === 'anime';
   const me = keyOf(state.me.email);
   const myVote = m?.votes?.[me] || 0;
   const close = openSheet(`
@@ -1390,37 +1480,69 @@ async function filmDetail(m, r) {
         <div class="fd-p">${poster(data.poster, 'w342')}</div>
         <div>
           <h2>${esc(data.title)}</h2>
-          <p class="muted">${data.type === 'tv' ? 'Série' : 'Film'}${data.year ? ' · ' + esc(data.year) : ''}${data.rating ? ' · ★ ' + Number(data.rating).toFixed(1) : ''}</p>
+          ${data.titleAlt ? `<p class="muted tiny" style="margin:0 0 4px">${esc(data.titleAlt)}</p>` : ''}
+          <p class="muted">${typeLabel(data)}${data.year ? ' · ' + esc(data.year) : ''}${data.rating ? ' · ★ ' + Number(data.rating).toFixed(1) : ''}</p>
           <div id="fd-extra" class="muted tiny">…</div>
         </div>
       </div>
-      ${data.overview ? `<p class="fd-ov">${esc(data.overview)}</p>` : ''}
+      <div id="fd-air"></div>
+      ${isAni && m && m.status !== 'seen' ? `
+        <div class="ep">
+          <span>Vu jusqu'à</span>
+          <button type="button" data-ep="-1" aria-label="Moins">−</button>
+          <b id="ep-n">Ép. ${m.progress || 0}${m.episodes ? ' / ' + m.episodes : ''}</b>
+          <button type="button" data-ep="1" class="plus">+1</button>
+        </div>` : ''}
+      ${data.overview ? `<p class="fd-ov">${esc(data.overview)}</p>${isAni ? '<p class="muted tiny">Résumé en anglais (AniList).</p>' : ''}` : ''}
       <div id="fd-where"></div>
       ${m && m.status === 'seen' ? `
         <div class="fd-votes"><span>Ton avis :</span>
           <button data-vote="1" class="${myVote > 0 ? 'sel' : ''}">👍 Aimé</button>
           <button data-vote="-1" class="${myVote < 0 ? 'sel' : ''}">👎 Bof</button>
         </div>
-        ${Object.entries(m.votes || {}).filter(([e, v]) => e !== me && v).map(([e, v]) => `<p class="muted tiny">${esc(nameOf(e))} : ${v > 0 ? '👍 a aimé' : '👎 bof'}</p>`).join('')}` : ''}
+        ${Object.entries(m.votes || {}).filter(([e, x]) => e !== me && x).map(([e, x]) => `<p class="muted tiny">${esc(nameOf(e))} : ${x > 0 ? '👍 a aimé' : '👎 bof'}</p>`).join('')}` : ''}
       <div class="actions">
         ${m ? `<button class="btn danger" id="fd-del">Retirer</button><span class="spacer"></span>
-               ${m.status === 'seen' ? '<button class="btn" id="fd-unseen">↺ À revoir</button>' : '<button class="btn primary" id="fd-seen">✓ On l\'a vu</button>'}`
+               ${m.status === 'seen' ? '<button class="btn" id="fd-unseen">↺ À revoir</button>' : `<button class="btn primary" id="fd-seen">✓ ${isAni && m.format !== 'MOVIE' ? 'Terminé' : 'On l\'a vu'}</button>`}`
             : `<span class="spacer"></span><button class="btn primary" id="fd-add">+ À voir</button>`}
       </div>
-      <p class="tmdb-credit">Ce produit utilise l'API TMDB mais n'est ni approuvé ni certifié par TMDB. Diffusion : JustWatch.</p>
+      <p class="tmdb-credit">${isAni ? 'Données anime : AniList.' : 'Ce produit utilise l\'API TMDB mais n\'est ni approuvé ni certifié par TMDB. Diffusion : JustWatch.'}</p>
     </div>`);
   if (m) {
     $('#fd-del').onclick = async () => { close(); if (await confirmSheet(`Retirer « ${m.title} » ?`, '', 'Retirer')) write(store.remove('movies', m.id)); };
-    $('#fd-seen') && ($('#fd-seen').onclick = () => { write(store.update('movies', m.id, { status: 'seen', seenAt: now() })); close(); toast('Bon film ? Donne ton avis dans « Vus » 🍿'); });
+    $('#fd-seen') && ($('#fd-seen').onclick = () => { write(store.update('movies', m.id, { status: 'seen', seenAt: now(), ...(isAni && m.episodes ? { progress: m.episodes } : {}) })); close(); toast('Bon visionnement ? Donne ton avis dans « Vus » 🍿'); });
     $('#fd-unseen') && ($('#fd-unseen').onclick = () => { write(store.update('movies', m.id, { status: 'towatch', seenAt: null })); close(); });
     $$('#sheet [data-vote]').forEach((b) => (b.onclick = () => {
-      const v = Number(b.dataset.vote);
-      write(store.update('movies', m.id, { votes: { ...(m.votes || {}), [me]: myVote === v ? 0 : v } }));
+      const x = Number(b.dataset.vote);
+      write(store.update('movies', m.id, { votes: { ...(m.votes || {}), [me]: myVote === x ? 0 : x } }));
       close();
+    }));
+    // Compteur d'épisodes : on enregistre une seconde après le dernier toucher.
+    let prog = m.progress || 0, saveT = null;
+    $$('#sheet [data-ep]').forEach((b) => (b.onclick = () => {
+      prog = Math.max(0, Math.min(m.episodes || 9999, prog + Number(b.dataset.ep)));
+      $('#ep-n').textContent = `Ép. ${prog}${m.episodes ? ' / ' + m.episodes : ''}`;
+      clearTimeout(saveT);
+      saveT = setTimeout(() => {
+        write(store.update('movies', m.id, { progress: prog, progressAt: now() }));
+        if (m.episodes && prog >= m.episodes) toast('Dernier épisode ! Touche « ✓ Terminé » quand c\'est fini 🎉');
+      }, 800);
     }));
   } else $('#fd-add').onclick = () => { addMovie(r); close(); };
 
-  // Détails : durée / saisons, genres, où regarder au Canada.
+  // Détails supplémentaires
+  if (isAni) {
+    try {
+      const a = r?.raw || (await anilist(`query ($id: Int) { Media(id: $id, type: ANIME) { ${ANI_FIELDS} } }`, { id: data.anilistId })).Media;
+      const ex = $('#fd-extra'); if (!ex) return;
+      ex.textContent = [ANI_FORMAT[a.format] || a.format, a.episodes ? `${a.episodes} épisodes` : '', ANI_STATUS[a.status], a.studios?.nodes?.[0]?.name, (a.genres || []).slice(0, 3).join(', ')].filter(Boolean).join(' · ');
+      const air = $('#fd-air');
+      if (air && a.nextAiringEpisode) air.innerHTML = `<div class="airing">${esc(airingText(a.nextAiringEpisode))}</div>`;
+      // Garder le nombre d'épisodes à jour (séries en cours).
+      if (m && a.episodes && a.episodes !== m.episodes) write(store.update('movies', m.id, { episodes: a.episodes }));
+    } catch { const ex = $('#fd-extra'); if (ex) ex.textContent = ''; }
+    return;
+  }
   if (!TMDB_KEY) { $('#fd-extra').textContent = ''; return; }
   try {
     const [det, prov] = await Promise.all([
@@ -1445,7 +1567,8 @@ async function filmDetail(m, r) {
 }
 
 function pickMovie() {
-  const pool = state.movies.filter((m) => m.status !== 'seen');
+  const ft = state.filmType;
+  const pool = state.movies.filter((m) => m.status !== 'seen' && (ft === 'all' || m.type === ft));
   if (!pool.length) return;
   let last = null;
   const show = () => {
@@ -1457,13 +1580,56 @@ function pickMovie() {
         <p class="muted">Ce soir, on regarde…</p>
         <div class="pick-p">${poster(m.poster, 'w342')}</div>
         <h2>${esc(m.title)}</h2>
-        <p class="muted">${m.type === 'tv' ? 'Série' : 'Film'}${m.year ? ' · ' + esc(m.year) : ''}</p>
+        <p class="muted">${typeLabel(m)}${m.year ? ' · ' + esc(m.year) : ''}${m.type === 'anime' && m.progress ? ` · on est à l'ép. ${m.progress}` : ''}</p>
         <div class="actions" style="justify-content:center"><button class="btn" id="pk-again">🎲 Un autre</button><button class="btn primary" id="pk-ok">🍿 Parfait !</button></div>
       </div>`);
     $('#pk-again').onclick = () => { close(); setTimeout(show, 80); };
     $('#pk-ok').onclick = () => { close(); filmDetail(m); };
   };
   show();
+}
+
+// ───────────────────────── THÈMES ─────────────────────────
+// Chaque téléphone garde son propre thème.
+const THEMES = {
+  vert:   { name: 'Forêt',     emoji: '🌿', light: { brand: '#2f5d50', soft: '#dce9e3', accent: '#e9a93c' }, dark: { brand: '#7cc2a8', soft: '#22382f', accent: '#e9a93c' } },
+  violet: { name: 'Améthyste', emoji: '💜', light: { brand: '#6b4bb3', soft: '#ebe4f8', accent: '#f0a6c8' }, dark: { brand: '#b9a1f0', soft: '#2e2645', accent: '#f0a6c8' } },
+  ocean:  { name: 'Océan',     emoji: '🌊', light: { brand: '#1f6a8f', soft: '#dcecf4', accent: '#f2b84b' }, dark: { brand: '#7cc4e6', soft: '#1d3340', accent: '#f2b84b' } },
+  rose:   { name: 'Framboise', emoji: '🌸', light: { brand: '#b23a62', soft: '#f8e1ea', accent: '#f0b44c' }, dark: { brand: '#f193b4', soft: '#3d2230', accent: '#f0b44c' } }
+};
+const darkMQ = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme(key = ls.get('nd-theme', 'vert')) {
+  const t = THEMES[key] || THEMES.vert;
+  const dark = !!darkMQ?.matches;
+  const c = dark ? t.dark : t.light;
+  const r = document.documentElement.style;
+  r.setProperty('--brand', c.brand);
+  r.setProperty('--brand-soft', c.soft);
+  r.setProperty('--accent', c.accent);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#121715' : c.brand);
+  document.documentElement.dataset.theme = key;
+}
+darkMQ?.addEventListener?.('change', () => applyTheme());
+applyTheme();
+
+function themeSheet() {
+  const cur = ls.get('nd-theme', 'vert');
+  const close = openSheet(`
+    <h2>Thème</h2>
+    <div class="themes">${Object.entries(THEMES).map(([k, t]) => `
+      <button class="theme ${k === cur ? 'sel' : ''}" data-theme="${k}">
+        <span class="sw" style="background:${t.light.brand}"><i style="background:${t.light.soft}"></i><i style="background:${t.light.accent}"></i></span>
+        <b>${t.emoji} ${t.name}</b>
+      </button>`).join('')}
+    </div>
+    <p class="muted tiny" style="margin-top:12px">Le thème s'adapte aussi au mode sombre de ton téléphone. Chacun choisit le sien.</p>
+    <div class="actions"><button class="btn primary" data-close>Terminé</button></div>`);
+  $('.themes').onclick = (e) => {
+    const b = e.target.closest('[data-theme]'); if (!b) return;
+    ls.set('nd-theme', b.dataset.theme);
+    applyTheme(b.dataset.theme);
+    $$('.themes .theme').forEach((x) => x.classList.toggle('sel', x === b));
+  };
 }
 
 // ───────────────────────── réglages & notifications ─────────────────────────
@@ -1483,6 +1649,10 @@ function openSettings() {
     <div class="setting">
       <div><div class="t">Ton prénom</div><div class="d">${esc(state.me.name || '—')}</div></div>
       <button class="btn small" id="s-name">Modifier</button>
+    </div>
+    <div class="setting">
+      <div><div class="t">Thème</div><div class="d">${THEMES[ls.get('nd-theme', 'vert')]?.emoji || ''} ${THEMES[ls.get('nd-theme', 'vert')]?.name || ''}</div></div>
+      <button class="btn small" id="s-theme">Changer</button>
     </div>
     <div class="setting">
       <div><div class="t">SMS « Je pars à l'épicerie »</div><div class="d">${myProfile().smsOn === false ? 'Désactivé' : (myProfile().phone ? 'Mon numéro : ' + esc(fmtPhone(myProfile().phone)) : 'Entre ton numéro et ton message')}</div></div>
@@ -1507,6 +1677,7 @@ function openSettings() {
   $('#s-logout') && ($('#s-logout').onclick = logout);
   $('#s-name').onclick = () => nameSheet(false);
   $('#s-sms').onclick = smsSheet;
+  $('#s-theme').onclick = themeSheet;
 }
 
 async function getSWReg() {
