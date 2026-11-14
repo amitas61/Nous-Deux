@@ -1,6 +1,7 @@
 // Nous deux — listes, notes et factures partagées.
 const CFG = self.FIREBASE_CONFIG || {};
 const VAPID = self.VAPID_KEY || '';
+const PUSH_URL = self.PUSH_URL || '';
 const DEMO = !CFG.apiKey;
 const FB = 'https://www.gstatic.com/firebasejs/10.12.2/';
 
@@ -65,8 +66,8 @@ function timeAgo(t) {
 
 // ───────────────────────── état ─────────────────────────
 const state = {
-  lists: [], items: [], notes: [], bills: [], payments: [], profiles: [],
-  loaded: { lists: false, items: false, notes: false, bills: false, payments: false, profiles: false },
+  lists: [], items: [], notes: [], bills: [], payments: [], profiles: [], freq: [], catmap: [], pings: [],
+  loaded: { lists: false, items: false, notes: false, bills: false, payments: false, profiles: false, freq: false, catmap: false, pings: false },
   billView: ls.get('nd-billview', 'due'),
   bilanMonth: todayISO().slice(0, 7),
   tab: 'listes',
@@ -100,6 +101,10 @@ function demoStore() {
         { id: uid(), title: 'Idées resto', body: 'Le petit thaï sur Mont-Royal\nBrunch dimanche ?', color: 'c1', updatedAt: now() - 3600000, by: 'Elle' }
       ],
       profiles: [{ id: 'toi@demo', name: 'Toi' }, { id: 'elle@demo', name: 'Elle' }],
+      freq: [['Lait 2 %', 9, 'laitier'], ['Bananes', 7, 'fruits'], ['Œufs', 6, 'laitier'], ['Pain tranché', 6, 'pain'], ['Café', 4, 'epicerie'], ['Yogourt grec', 4, 'laitier'], ['Poulet', 3, 'viande'], ['Papier de toilette', 2, 'hygiene']]
+        .map(([text, count, cat], i) => ({ id: docId(itemKey(text)), text, count, cat, last: now() - i * 86400000 })),
+      catmap: [],
+      pings: [{ id: 'elle@demo', at: now() - 4 * 60000, listName: 'Épicerie', done: false }],
       payments: [
         { id: uid(), billId: 'x1', name: 'Loyer', amount: 1250, date: addDays(t, -10), paidBy: 'toi@demo', owner: 'shared', shares: { 'toi@demo': 0.5, 'elle@demo': 0.5 }, createdAt: now() - 3 },
         { id: uid(), billId: 'x2', name: 'Internet', amount: 85, date: addDays(t, -6), paidBy: 'elle@demo', owner: 'shared', shares: { 'toi@demo': 0.5, 'elle@demo': 0.5 }, createdAt: now() - 2 },
@@ -268,7 +273,7 @@ function startApp() {
       show('#screen-denied');
     } else banner('Problème de synchronisation : ' + esc(err.code || err.message));
   };
-  for (const col of ['lists', 'items', 'notes', 'bills', 'payments']) {
+  for (const col of ['lists', 'items', 'notes', 'bills', 'payments', 'freq', 'catmap', 'pings']) {
     store.subscribe(col, (rows) => { state[col] = rows; state.loaded[col] = true; render(col); }, onErr);
   }
   store.subscribe('profiles', (rows, meta) => { state.loaded.profiles = true; onProfiles(rows, meta); }, onErr);
@@ -322,8 +327,10 @@ function wireStatic() {
     const text = input.value.trim();
     if (!text || !state.currentList) return;
     input.value = '';
-    write(store.add('items', { listId: state.currentList, text, done: false, by: state.me.name, createdAt: now() }));
+    addItem(text);
   };
+  $('#btn-shop').onclick = startShopping;
+  wireLongPress($('#v-listes'));
   $('#lists-empty').addEventListener('click', (e) => {
     const b = e.target.closest('[data-create-list]');
     if (!b) return;
@@ -347,13 +354,96 @@ function setTab(tab, noHash) {
 }
 
 function render(col) {
-  if (col === 'lists' || col === 'items') renderLists();
+  if (['lists', 'items', 'freq', 'catmap', 'pings'].includes(col)) renderLists();
   if (col === 'notes') renderNotes();
   if (col === 'bills' || col === 'payments') renderBills();
 }
 
 // ───────────────────────── LISTES ─────────────────────────
+// Rayons, dans l'ordre d'un supermarché typique au Québec.
+const AISLES = [
+  ['fruits', '🥦', 'Fruits et légumes'],
+  ['pain', '🥖', 'Boulangerie'],
+  ['viande', '🥩', 'Viandes et poissons'],
+  ['laitier', '🧀', 'Produits laitiers et œufs'],
+  ['epicerie', '🥫', 'Épicerie'],
+  ['collation', '🍪', 'Collations'],
+  ['boisson', '🧃', 'Boissons'],
+  ['surgele', '🧊', 'Surgelés'],
+  ['hygiene', '🧴', 'Hygiène et beauté'],
+  ['menage', '🧽', 'Entretien ménager'],
+  ['pharma', '💊', 'Pharmacie'],
+  ['bebe', '🐾', 'Bébé et animaux'],
+  ['autre', '🛒', 'Autres']
+];
+const AISLE = Object.fromEntries(AISLES.map(([k, e, n], i) => [k, { emoji: e, name: n, order: i }]));
+const KW = {
+  fruits: 'pomme,poire,banane,orange,clementine,mandarine,citron,lime,raisin,fraise,framboise,bleuet,mure,canneberge,mangue,ananas,kiwi,melon,cantaloup,pasteque,avocat,tomate,concombre,laitue,salade,epinard,brocoli,chou,chou-fleur,carotte,celeri,oignon,echalote,ail,patate,pomme de terre,patate douce,poivron,piment,champignon,courgette,zucchini,aubergine,haricot vert,mais en epi,radis,betterave,persil,coriandre,basilic,menthe,ciboulette,aneth,gingembre,legume,fruit,petits fruits,cerise,peche,nectarine,prune,pamplemousse,grenade,roquette,kale,asperge,poireau,courge,citrouille,navet,panais,germe,fines herbes',
+  pain: 'pain,baguette,croissant,bagel,tortilla,wrap,pita,muffin,brioche,naan,chausson,gateau,pain hamburger,pain hot-dog,pain a hot-dog,pain tranche,petit pain,english muffin,croute a pizza',
+  viande: 'poulet,boeuf,porc,jambon,bacon,saucisse,saucisson,steak,viande,boeuf hache,porc hache,hache,dinde,agneau,veau,saumon,truite,poisson,crevette,petoncle,homard,tilapia,morue,aiglefin,filet,cotelette,cuisse,poitrine,aile,roti,pepperoni,salami,charcuterie,tofu,smoked meat,creton,pate de foie,hot-dog,wiener',
+  laitier: 'lait,creme,creme sure,creme fouettee,beurre,fromage,yogourt,yaourt,oeuf,cheddar,mozzarella,parmesan,feta,cottage,ricotta,brie,camembert,suisse,gouda,margarine,kefir,fromage en grains,lait d\'avoine,lait d\'amande,boisson d\'amande,boisson de soya,fromage a la creme,philadelphia',
+  epicerie: 'pate,pates,spaghetti,macaroni,penne,fusilli,lasagne,nouille,riz,quinoa,couscous,farine,sucre,cassonade,sel,poivre,huile,huile d\'olive,vinaigre,sauce,sauce tomate,sauce soya,ketchup,moutarde,mayonnaise,mayo,relish,conserve,soupe,bouillon,cereale,cereales,gruau,avoine,miel,sirop,sirop d\'erable,confiture,beurre d\'arachide,nutella,epice,cannelle,paprika,cumin,origan,thon,sardine,haricots,feves,lentille,pois chiche,noix,amande,arachide,cafe,the,tisane,levure,bicarbonate,poudre a pate,pate de tomate,tomates en des,lait de coco,cornichon,olive,salsa,vanille,chapelure,bouillon de poulet,kraft dinner,pouding,jello,gelee',
+  collation: 'chips,croustille,croustilles,biscuit,biscuits,craquelin,craquelins,chocolat,bonbon,bonbons,popcorn,mais souffle,barre tendre,barre granola,barre,noix melangees,gomme,jujube,reglisse,bretzel,nachos,doritos,oreo,dessert',
+  boisson: 'jus,jus d\'orange,eau,eau gazeuse,eau petillante,liqueur,boisson gazeuse,boisson,biere,vin,cidre,kombucha,gatorade,perrier,cola,coke,pepsi,limonade,the glace,boisson energisante',
+  surgele: 'surgele,surgeles,congele,congeles,glace,creme glacee,pizza,frites,pizza congelee,popsicle,sorbet,legumes surgeles,fruits congeles,pogo,croquettes,nuggets,lasagne congelee,gaufre',
+  hygiene: 'savon,savon a main,gel douche,shampoing,shampooing,revitalisant,dentifrice,brosse a dent,brosse a dents,soie dentaire,rince-bouche,deodorant,rasoir,lame,papier de toilette,papier toilette,papier hygienique,mouchoir,mouchoirs,kleenex,coton,coton-tige,q-tips,tampon,tampons,serviette sanitaire,serviettes sanitaires,creme solaire,lotion,creme hydratante,maquillage,vernis',
+  menage: 'detergent,detersif,savon a vaisselle,savon a linge,tablette lave-vaisselle,lave-vaisselle,javel,eau de javel,nettoyant,windex,lysol,essuie-tout,papier essuie-tout,sac poubelle,sacs poubelle,sac a ordures,sacs a ordures,sac compost,sacs compost,sacs ziploc,ziploc,papier aluminium,papier d\'aluminium,papier parchemin,pellicule,pellicule plastique,eponge,eponges,assouplissant,feuilles assouplissantes,ampoule,pile,piles,chiffon,gants',
+  pharma: 'tylenol,advil,motrin,ibuprofene,acetaminophene,vitamine,vitamines,medicament,pansement,diachylon,sirop contre la toux,antihistaminique,reactine,gravol,thermometre,ordonnance',
+  bebe: 'couche,couches,lingette,lingettes,lait maternise,formule,puree bebe,nourriture pour chat,nourriture pour chien,bouffe a chat,bouffe a chien,litiere,gateries,croquettes pour chat,croquettes pour chien'
+};
+const norm = (s) => String(s || '').toLowerCase().replace(/œ/g, 'oe').replace(/æ/g, 'ae').normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[’`]/g, "'").replace(/\s+/g, ' ').trim();
+// Clé d'un article : sans quantités ni unités (« 2 x Lait 2 % 4L » → « lait »).
+function itemKey(text) {
+  return norm(text)
+    .replace(/\(.*?\)/g, ' ')
+    .replace(/\b\d+([.,]\d+)?\s*(x|%|kg|g|lb|lbs|l|ml|oz|un|pqt|paquet|paquets|boite|boites|sac|sacs|douzaine)?\b/g, ' ')
+    .replace(/^(x|de|des|du|la|le|les|un|une)\s+/, '')
+    .replace(/[^a-z0-9' -]/g, ' ').replace(/\s+/g, ' ').trim()
+    .slice(0, 80);
+}
+const KW_LIST = Object.entries(KW).flatMap(([cat, list]) => list.split(',').map((k) => [norm(k), cat])).sort((a, b) => b[0].length - a[0].length);
+function guessAisle(text) {
+  const k = itemKey(text);
+  if (!k) return 'autre';
+  const mem = state.catmap.find((c) => c.id === docId(k));
+  if (mem && AISLE[mem.cat]) return mem.cat;
+  for (const [kw, cat] of KW_LIST) {
+    const re = new RegExp(`(^|[^a-z])${kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(s|x)?($|[^a-z])`);
+    if (re.test(k)) return cat;
+  }
+  return 'autre';
+}
+// Identifiant de document Firestore sûr à partir d'une clé d'article.
+const docId = (k) => k.replace(/[^a-z0-9-]/g, '_').slice(0, 120) || '_';
+
 function sortedLists() { return [...state.lists].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); }
+
+function addItem(text, listId = state.currentList) {
+  text = text.trim();
+  if (!text || !listId) return;
+  const cat = guessAisle(text);
+  write(store.add('items', { listId, text, done: false, by: state.me.name, byEmail: keyOf(state.me.email), cat, createdAt: now() }));
+  bumpFreq(text, cat);
+  notifyShopper(text, listId);
+}
+
+// Articles fréquents : un compteur par article.
+function bumpFreq(text, cat) {
+  const k = itemKey(text);
+  if (!k) return;
+  const id = docId(k);
+  const prev = state.freq.find((f) => f.id === id);
+  write(store.set('freq', id, { text: prev?.text && prev.count > 1 ? prev.text : text, count: (prev?.count || 0) + 1, last: now(), cat, hidden: false }));
+}
+function frequentFor(listId) {
+  const inList = new Set(state.items.filter((i) => i.listId === listId && !i.done).map((i) => docId(itemKey(i.text))));
+  const day = 86400000;
+  return state.freq
+    .filter((f) => !f.hidden && f.count >= 2 && !inList.has(f.id) && !inList.has(docId(itemKey(f.text))))
+    .map((f) => ({ ...f, score: f.count / (1 + (now() - (f.last || 0)) / (30 * day)) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 12);
+}
 
 function renderLists() {
   if (!state.loaded.lists) return;
@@ -362,7 +452,7 @@ function renderLists() {
   $('#lists-empty').hidden = !empty;
   $('#list-body').hidden = empty;
   $('.chips-row').hidden = empty;
-  if (empty) return;
+  if (empty) { $('#shop-banner').hidden = true; return; }
 
   if (!lists.find((l) => l.id === state.currentList)) { state.currentList = lists[0].id; ls.set('nd-list', state.currentList); }
 
@@ -384,7 +474,17 @@ function renderLists() {
   chips.oncontextmenu = (e) => { const b = e.target.closest('.chip[data-id]'); if (b) { e.preventDefault(); listMenu(b.dataset.id); } };
 
   const cur = lists.find((l) => l.id === state.currentList);
+  const byAisle = cur.sort !== 'recent';
   $('#item-input').placeholder = `Ajouter à « ${cur.name} »…`;
+
+  renderShopping(cur);
+
+  // Pastilles « souvent achetés »
+  const freq = frequentFor(cur.id);
+  const fr = $('#freq-row');
+  fr.hidden = !freq.length;
+  fr.innerHTML = freq.length ? `<div class="freq-title">Souvent achetés</div><div class="chips freq">${freq.map((f) => `<button class="chip small" data-freq="${esc(f.id)}">+ ${esc(f.text)}</button>`).join('')}</div>` : '';
+  $('#freq-list').innerHTML = state.freq.filter((f) => !f.hidden).slice(0, 300).map((f) => `<option value="${esc(f.text)}"></option>`).join('');
 
   const mine = state.items.filter((i) => i.listId === state.currentList);
   const todo = mine.filter((i) => !i.done).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
@@ -400,19 +500,31 @@ function renderLists() {
     </li>`;
 
   const ul = $('#items');
-  ul.innerHTML = todo.length ? todo.map(itemHTML).join('') : '';
-  if (!todo.length) ul.innerHTML = '';
+  if (byAisle && todo.length) {
+    const groups = {};
+    todo.forEach((i) => { const c = AISLE[i.cat] ? i.cat : guessAisle(i.text); (groups[c] ||= []).push(i); });
+    const order = Object.keys(groups).sort((a, b) => AISLE[a].order - AISLE[b].order);
+    ul.className = 'aisles';
+    ul.innerHTML = order.map((c) => `
+      <li class="aisle"><div class="aisle-head">${AISLE[c].emoji} ${esc(AISLE[c].name)} <span>${groups[c].length}</span></div>
+        <ul class="items">${groups[c].sort((a, b) => a.text.localeCompare(b.text, 'fr')).map(itemHTML).join('')}</ul></li>`).join('');
+  } else {
+    ul.className = 'items';
+    ul.innerHTML = todo.map(itemHTML).join('');
+  }
 
   const ds = $('#done-section');
+  const hint = byAisle && todo.length && !ls.get('nd-hint-aisle') ? `<p class="hint">💡 Appui long sur un article pour le modifier ou changer son rayon. <button class="link-btn" data-hint-ok>OK</button></p>` : '';
   if (!todo.length && !done.length) {
     ds.innerHTML = `<div class="empty"><div class="empty-emoji">✨</div><p>Liste vide. Ajoute un premier article ci-dessus.</p></div>`;
   } else if (!todo.length && done.length) {
     ds.innerHTML = `<div class="empty" style="padding:20px"><p>Tout est coché 🎉</p></div>` + doneBlock(done, itemHTML);
   } else {
-    ds.innerHTML = done.length ? doneBlock(done, itemHTML) : '';
+    ds.innerHTML = hint + (done.length ? doneBlock(done, itemHTML) : '');
   }
 
   const onItemClick = (e) => {
+    if (suppressClick) { suppressClick = false; return; }
     const li = e.target.closest('.item');
     if (!li) return;
     const it = state.items.find((x) => x.id === li.dataset.id);
@@ -426,6 +538,7 @@ function renderLists() {
   };
   ul.onclick = onItemClick;
   ds.onclick = (e) => {
+    if (e.target.closest('[data-hint-ok]')) { ls.set('nd-hint-aisle', true); return renderLists(); }
     if (e.target.closest('.toggle-done')) { state.showDone = !state.showDone; ls.set('nd-showdone', state.showDone); return renderLists(); }
     if (e.target.closest('.clear-done')) {
       const ids = done.map((i) => i.id);
@@ -435,6 +548,213 @@ function renderLists() {
     }
     onItemClick(e);
   };
+  fr.onclick = (e) => {
+    if (suppressClick) { suppressClick = false; return; }
+    const b = e.target.closest('[data-freq]'); if (!b) return;
+    const f = state.freq.find((x) => x.id === b.dataset.freq);
+    if (f) { addItem(f.text); toast(`« ${f.text} » ajouté`); }
+  };
+}
+
+// Appui long : sur un article (modifier / rayon) ou une pastille fréquente (retirer des suggestions).
+let suppressClick = false;
+function wireLongPress(root) {
+  let timer = null, startX = 0, startY = 0;
+  root.addEventListener('pointerdown', (e) => {
+    const target = e.target.closest('.item, [data-freq]');
+    if (!target) return;
+    startX = e.clientX; startY = e.clientY;
+    timer = setTimeout(() => {
+      timer = null;
+      suppressClick = true;
+      setTimeout(() => (suppressClick = false), 800);
+      if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
+      if (target.dataset.freq) freqMenu(target.dataset.freq);
+      else itemSheet(state.items.find((i) => i.id === target.dataset.id));
+    }, 500);
+  });
+  const cancel = (e) => { if (timer && (e.type !== 'pointermove' || Math.hypot(e.clientX - startX, e.clientY - startY) > 10)) { clearTimeout(timer); timer = null; } };
+  ['pointerup', 'pointercancel', 'pointerleave', 'pointermove'].forEach((t) => root.addEventListener(t, cancel));
+  root.addEventListener('contextmenu', (e) => { if (e.target.closest('.item, [data-freq]')) e.preventDefault(); });
+}
+
+function itemSheet(it) {
+  if (!it) return;
+  const cur = AISLE[it.cat] ? it.cat : guessAisle(it.text);
+  const close = openSheet(`
+    <h2>Modifier l'article</h2>
+    <form id="f-item" autocomplete="off">
+      <label class="field"><span>Article</span><input name="text" required maxlength="200" value="${esc(it.text)}"></label>
+      <div class="field"><span>Rayon</span>
+        <div class="aisle-pick">${AISLES.map(([k, e, n]) => `<button type="button" data-cat="${k}" class="${k === cur ? 'sel' : ''}">${e} ${esc(n)}</button>`).join('')}</div>
+      </div>
+      <div class="actions"><button type="button" class="btn danger" id="i-del">Supprimer</button><span class="spacer"></span><button type="button" class="btn" data-close>Annuler</button><button class="btn primary">Enregistrer</button></div>
+    </form>`);
+  const f = $('#f-item');
+  let cat = cur;
+  $('.aisle-pick').onclick = (e) => {
+    const b = e.target.closest('[data-cat]'); if (!b) return;
+    cat = b.dataset.cat;
+    $$('.aisle-pick button').forEach((x) => x.classList.toggle('sel', x === b));
+  };
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const text = f.text.value.trim();
+    if (!text) return;
+    write(store.update('items', it.id, { text, cat }));
+    if (cat !== cur || text !== it.text) {
+      const k = itemKey(text);
+      // On retient le rayon choisi pour la prochaine fois.
+      if (k && cat !== cur) write(store.set('catmap', docId(k), { cat, text }));
+    }
+    close();
+  };
+  $('#i-del').onclick = () => { close(); write(store.remove('items', it.id)); toast(`« ${it.text} » supprimé`); };
+}
+
+async function freqMenu(id) {
+  const f = state.freq.find((x) => x.id === id);
+  if (!f) return;
+  if (await confirmSheet(`Retirer « ${f.text} » des suggestions ?`, 'Il ne sera plus proposé dans « Souvent achetés ». S\'il est ajouté souvent à nouveau, il reviendra.', 'Retirer')) {
+    write(store.set('freq', id, { hidden: true, count: 0 }));
+  }
+}
+
+// ── « Je pars à l'épicerie » ──
+// Chaque personne a un document pings/<courriel> : le dernier départ annoncé.
+const PING_TTL = 2 * 3600000;
+function activePing(fromMe) {
+  const me = keyOf(state.me.email);
+  return state.pings
+    .filter((p) => (fromMe ? p.id === me : p.id !== me) && now() - (p.at || 0) < PING_TTL && !p.done)
+    .sort((a, b) => b.at - a.at)[0];
+}
+function renderShopping(cur) {
+  const other = activePing(false);
+  const mine = activePing(true);
+  const banner = $('#shop-banner');
+  const dismissed = ls.get('nd-ping-dismissed', 0);
+  if (other && other.at > dismissed) {
+    banner.hidden = false;
+    banner.innerHTML = `<span>🛒 <b>${esc(nameOf(other.id))}</b> part à l'épicerie${other.listName ? ` (${esc(other.listName)})` : ''} · ${timeAgo(other.at)}.<br>Ajoute ce qui manque !</span><button class="link-btn" data-ping-ok>OK</button>`;
+    banner.onclick = (e) => { if (e.target.closest('[data-ping-ok]')) { ls.set('nd-ping-dismissed', other.at); renderLists(); } };
+  } else banner.hidden = true;
+
+  const btn = $('#btn-shop');
+  btn.classList.toggle('active', !!mine);
+  btn.innerHTML = mine
+    ? `<span>🛒 Tu es à l'épicerie · prévenu ${timeAgo(mine.at)}</span><b>J'ai fini</b>`
+    : `<span>🛒 Je pars à l'épicerie</span><b>Prévenir ${esc(otherName())}</b>`;
+}
+function otherName() {
+  const o = people().find((p) => p.email !== keyOf(state.me.email));
+  return o ? o.name : "l'autre";
+}
+
+// ── SMS : chacun entre SON numéro et SON message dans les Réglages ──
+const DEFAULT_SMS = "🛒 Je pars à l'épicerie ({liste}). Besoin de quelque chose ? Ajoute-le dans Nous deux !";
+const myProfile = () => state.profiles.find((p) => p.id === keyOf(state.me.email)) || {};
+const otherProfile = () => state.profiles.find((p) => p.id !== keyOf(state.me.email)) || null;
+function normPhone(s) {
+  let d = String(s || '').replace(/[^\d+]/g, '');
+  if (/^\d{10}$/.test(d)) d = '+1' + d;
+  else if (/^1\d{10}$/.test(d)) d = '+' + d;
+  return d;
+}
+function fmtPhone(s) {
+  const m = String(s || '').match(/^\+1(\d{3})(\d{3})(\d{4})$/);
+  return m ? `${m[1]} ${m[2]}-${m[3]}` : (s || '');
+}
+function smsText(listName) {
+  const tpl = myProfile().shopMsg || DEFAULT_SMS;
+  const other = otherProfile();
+  return tpl
+    .replace(/\{liste\}/gi, listName || 'épicerie')
+    .replace(/\{prénom\}|\{prenom\}/gi, other?.name || '')
+    .replace(/\s+\(\)/g, '').trim();
+}
+function openSms(listName) {
+  const other = otherProfile();
+  const to = other?.phone ? encodeURIComponent(other.phone) : '';
+  // Android ouvre l'appli Messages avec le numéro et le texte déjà remplis.
+  location.href = `sms:${to}?body=${encodeURIComponent(smsText(listName))}`;
+}
+
+async function startShopping() {
+  const cur = state.lists.find((l) => l.id === state.currentList);
+  const me = keyOf(state.me.email);
+  const mine = activePing(true);
+  if (mine) { write(store.set('pings', me, { done: true })); toast('Bonne fin de journée 🛍️'); return; }
+  // Le SMS doit s'ouvrir tout de suite, pendant le toucher (Android l'exige).
+  const sms = myProfile().smsOn !== false && !DEMO;
+  if (sms) openSms(cur?.name || '');
+  write(store.set('pings', me, { at: now(), listId: cur?.id || null, listName: cur?.name || '', done: false }));
+  const sent = await pushNow({ kind: 'shopping', listName: cur?.name || '' });
+  if (!sms) toast(sent ? `${otherName()} a reçu une notification ✓` : `${otherName()} le verra en ouvrant l'appli ✓`);
+  else if (DEMO) toast('Mode démo : Messages s\'ouvrirait ici');
+}
+
+function smsSheet() {
+  const p = myProfile();
+  const other = otherProfile();
+  const close = openSheet(`
+    <h2>SMS « Je pars à l'épicerie »</h2>
+    <form id="f-sms" autocomplete="off">
+      <label class="check"><input type="checkbox" name="on" ${p.smsOn !== false ? 'checked' : ''}> Ouvrir Messages quand je touche le bouton</label>
+      <label class="field"><span>Mon numéro de cellulaire</span><input name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="514 555-1234" value="${esc(fmtPhone(p.phone))}"></label>
+      <p class="muted tiny">C'est ${other ? esc(other.name) : "l'autre"} qui l'utilisera pour t'écrire. ${other ? (other.phone ? `✓ Le numéro de ${esc(other.name)} est déjà enregistré.` : `${esc(other.name)} n'a pas encore entré son numéro : Messages s'ouvrira sans destinataire.`) : ''}</p>
+      <label class="field"><span>Mon message</span><textarea name="msg" rows="3" maxlength="300">${esc(p.shopMsg || DEFAULT_SMS)}</textarea></label>
+      <div class="tags">Insérer : <button type="button" data-tag="{liste}">{liste}</button> <button type="button" data-tag="{prénom}">{prénom}</button> <button type="button" class="link-btn" data-reset>Message par défaut</button></div>
+      <div class="preview"><span>Aperçu</span><p id="sms-prev"></p></div>
+      <div class="actions"><button type="button" class="btn" data-close>Annuler</button><button class="btn primary">Enregistrer</button></div>
+    </form>`);
+  const f = $('#f-sms');
+  const prev = () => {
+    const tpl = f.msg.value || DEFAULT_SMS;
+    const cur = state.lists.find((l) => l.id === state.currentList);
+    $('#sms-prev').textContent = tpl.replace(/\{liste\}/gi, cur?.name || 'Épicerie').replace(/\{prénom\}|\{prenom\}/gi, other?.name || 'Elle');
+  };
+  f.msg.oninput = prev; prev();
+  $('.tags').onclick = (e) => {
+    const t = e.target.closest('[data-tag]');
+    if (t) { const i = f.msg.selectionStart ?? f.msg.value.length; f.msg.value = f.msg.value.slice(0, i) + t.dataset.tag + f.msg.value.slice(f.msg.selectionEnd ?? i); f.msg.focus(); prev(); }
+    if (e.target.closest('[data-reset]')) { f.msg.value = DEFAULT_SMS; prev(); }
+  };
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const phone = normPhone(f.phone.value);
+    if (f.phone.value.trim() && !/^\+\d{8,15}$/.test(phone)) { f.phone.focus(); return toast('Numéro invalide'); }
+    const msg = f.msg.value.trim();
+    write(store.set('profiles', keyOf(state.me.email), { phone, shopMsg: msg && msg !== DEFAULT_SMS ? msg : '', smsOn: f.on.checked, updatedAt: now() }));
+    close();
+    toast('Enregistré ✓');
+  };
+}
+
+// Quand l'autre est à l'épicerie et que j'ajoute un article, on le prévient tout de suite.
+let addedQueue = [], addedTimer = null;
+function notifyShopper(text, listId) {
+  const p = activePing(false);
+  if (!p || !PUSH_URL) return;
+  addedQueue.push(text);
+  clearTimeout(addedTimer);
+  addedTimer = setTimeout(() => {
+    const items = addedQueue.splice(0);
+    const list = state.lists.find((l) => l.id === listId);
+    pushNow({ kind: 'added', items, listName: list?.name || '' });
+  }, 4000); // regroupe les ajouts faits d'affilée
+}
+
+// Notification instantanée via le petit service « Worker » (optionnel, voir guide).
+async function pushNow(payload) {
+  if (!PUSH_URL || DEMO || !fb?.auth?.currentUser) return false;
+  try {
+    const idToken = await fb.auth.currentUser.getIdToken();
+    const res = await fetch(PUSH_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...payload, idToken }) });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok) console.warn('push', out);
+    return res.ok && out.sent > 0;
+  } catch (e) { console.warn('push', e); return false; }
 }
 
 function doneBlock(done, itemHTML) {
@@ -453,9 +773,11 @@ function createList(name) {
 function listMenu(id) {
   const l = state.lists.find((x) => x.id === id);
   if (!l) return;
+  const byAisle = l.sort !== 'recent';
   const close = openSheet(`
     <h2>${esc(l.name)}</h2>
     <div class="menu-list">
+      <button data-a="sort">${byAisle ? '🕒 Trier par ordre d\'ajout' : '🥦 Trier par rayon'}</button>
       <button data-a="rename">✏️ Renommer la liste</button>
       <button data-a="uncheck">↺ Tout décocher</button>
       <button data-a="delete" class="danger">🗑️ Supprimer la liste</button>
@@ -464,6 +786,7 @@ function listMenu(id) {
     const a = e.target.closest('button')?.dataset.a;
     if (!a) return;
     close();
+    if (a === 'sort') write(store.update('lists', id, { sort: byAisle ? 'recent' : 'aisle' }));
     if (a === 'rename') editListSheet(l);
     if (a === 'uncheck') state.items.filter((i) => i.listId === id && i.done).forEach((i) => write(store.update('items', i.id, { done: false, doneAt: null })));
     if (a === 'delete') {
@@ -939,8 +1262,15 @@ function openSettings() {
       <button class="btn small" id="s-name">Modifier</button>
     </div>
     <div class="setting">
+      <div><div class="t">SMS « Je pars à l'épicerie »</div><div class="d">${myProfile().smsOn === false ? 'Désactivé' : (myProfile().phone ? 'Mon numéro : ' + esc(fmtPhone(myProfile().phone)) : 'Entre ton numéro et ton message')}</div></div>
+      <button class="btn small" id="s-sms">Modifier</button>
+    </div>
+    <div class="setting">
       <div><div class="t">Rappels de factures</div><div class="d">${esc(ns.text)}</div></div>
       ${ns.ok ? (ns.on ? '<button class="btn small" id="s-test">Tester</button>' : '<button class="btn primary small" id="s-notif">Activer</button>') : ''}
+    </div>
+    <div class="setting">
+      <div><div class="t">Notifications instantanées</div><div class="d">${PUSH_URL ? 'Activées (épicerie, ajouts d\'articles)' : 'Non configurées : l\'autre voit l\'alerte en ouvrant l\'appli. Optionnel, voir le guide (étape 10).'}</div></div>
     </div>
     ${installEvent ? `<div class="setting"><div><div class="t">Installer l'appli</div><div class="d">Ajoute « Nous deux » à l'écran d'accueil.</div></div><button class="btn primary small" id="s-install">Installer</button></div>` : ''}
     <div class="setting">
@@ -956,6 +1286,7 @@ function openSettings() {
   $('#s-install') && ($('#s-install').onclick = async () => { installEvent.prompt(); await installEvent.userChoice; installEvent = null; close(); });
   $('#s-logout') && ($('#s-logout').onclick = logout);
   $('#s-name').onclick = () => nameSheet(false);
+  $('#s-sms').onclick = smsSheet;
 }
 
 async function getSWReg() {
@@ -1063,6 +1394,7 @@ function toast(msg, actionLabel, onAction) {
 }
 
 // Rafraîchir les « dans X jours » quand on revient sur l'appli un autre jour.
-document.addEventListener('visibilitychange', () => { if (!document.hidden && store) renderBills(); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && store) { renderBills(); renderLists(); } });
+setInterval(() => { if (store && !document.hidden && state.tab === 'listes' && state.pings.length) renderLists(); }, 60000);
 
 main();

@@ -54,13 +54,17 @@
       <div class="chips-row">
         <div id="list-chips" class="chips"></div>
       </div>
+      <div id="shop-banner" class="shop-banner" hidden></div>
       <div id="list-body">
+        <button id="btn-shop" class="shop-btn"></button>
         <form id="add-item" class="add-bar" autocomplete="off">
-          <input id="item-input" placeholder="Ajouter un article…" enterkeyhint="done" maxlength="200">
+          <input id="item-input" placeholder="Ajouter un article…" enterkeyhint="done" maxlength="200" list="freq-list">
+          <datalist id="freq-list"></datalist>
           <button class="add-btn" aria-label="Ajouter">
             <svg viewBox="0 0 24 24" width="22" height="22"><path fill="currentColor" d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg>
           </button>
         </form>
+        <div id="freq-row" class="freq-row" hidden></div>
         <ul id="items" class="items"></ul>
         <div id="done-section"></div>
       </div>
