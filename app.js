@@ -65,8 +65,10 @@ function timeAgo(t) {
 
 // ───────────────────────── état ─────────────────────────
 const state = {
-  lists: [], items: [], notes: [], bills: [],
-  loaded: { lists: false, items: false, notes: false, bills: false },
+  lists: [], items: [], notes: [], bills: [], payments: [], profiles: [],
+  loaded: { lists: false, items: false, notes: false, bills: false, payments: false, profiles: false },
+  billView: ls.get('nd-billview', 'due'),
+  bilanMonth: todayISO().slice(0, 7),
   tab: 'listes',
   currentList: ls.get('nd-list'),
   showDone: ls.get('nd-showdone', true),
@@ -97,10 +99,17 @@ function demoStore() {
         { id: uid(), title: 'Code Wi-Fi', body: 'Réseau : Maison\nMot de passe : à remplir', color: 'c4', updatedAt: now() - 86400000 * 3, by: 'Toi' },
         { id: uid(), title: 'Idées resto', body: 'Le petit thaï sur Mont-Royal\nBrunch dimanche ?', color: 'c1', updatedAt: now() - 3600000, by: 'Elle' }
       ],
+      profiles: [{ id: 'toi@demo', name: 'Toi' }, { id: 'elle@demo', name: 'Elle' }],
+      payments: [
+        { id: uid(), billId: 'x1', name: 'Loyer', amount: 1250, date: addDays(t, -10), paidBy: 'toi@demo', owner: 'shared', shares: { 'toi@demo': 0.5, 'elle@demo': 0.5 }, createdAt: now() - 3 },
+        { id: uid(), billId: 'x2', name: 'Internet', amount: 85, date: addDays(t, -6), paidBy: 'elle@demo', owner: 'shared', shares: { 'toi@demo': 0.5, 'elle@demo': 0.5 }, createdAt: now() - 2 },
+        { id: uid(), billId: 'x3', name: 'Cellulaire', amount: 45, date: addDays(t, -3), paidBy: 'elle@demo', owner: 'elle@demo', shares: { 'elle@demo': 1 }, createdAt: now() - 1 }
+      ],
       bills: [
-        { id: uid(), name: 'Hydro-Québec', amount: 128.4, dueDate: addDays(t, 2), recurrence: 'monthly', anchorDay: parseISO(addDays(t, 2)).getDate(), remindDays: 3, paid: false, createdAt: now() },
+        { id: uid(), name: 'Hydro-Québec', amount: 128.4, dueDate: addDays(t, 2), recurrence: 'monthly', anchorDay: parseISO(addDays(t, 2)).getDate(), remindDays: 3, paid: false, createdAt: now(), owner: 'shared' },
         { id: uid(), name: 'Internet', amount: 85, dueDate: addDays(t, 12), recurrence: 'monthly', anchorDay: parseISO(addDays(t, 12)).getDate(), remindDays: 3, paid: false, createdAt: now() },
-        { id: uid(), name: 'Assurance auto', amount: 96.15, dueDate: addDays(t, -1), recurrence: 'monthly', anchorDay: parseISO(addDays(t, -1)).getDate(), remindDays: 3, paid: false, createdAt: now() }
+        { id: uid(), name: 'Assurance auto', amount: 96.15, dueDate: addDays(t, -1), recurrence: 'monthly', anchorDay: parseISO(addDays(t, -1)).getDate(), remindDays: 3, paid: false, createdAt: now(), owner: 'toi@demo' },
+        { id: uid(), name: 'Loyer', amount: 1250, dueDate: addDays(t, 20), recurrence: 'monthly', anchorDay: parseISO(addDays(t, 20)).getDate(), remindDays: 5, paid: false, createdAt: now(), owner: 'shared', lastPaid: addDays(t, -10), paidBy: 'toi@demo', paidFor: addMonths(addDays(t, 20), -1) }
       ]
     };
     ls.set(KEY, data);
@@ -110,7 +119,8 @@ function demoStore() {
   const emit = (col) => (subs[col] || []).forEach((cb) => cb(snap(col)));
   const save = () => ls.set(KEY, data);
   return {
-    subscribe(col, cb) { (subs[col] ||= []).push(cb); data[col] ||= []; setTimeout(() => cb(snap(col)), 0); return () => {}; },
+    subscribe(col, cb) { (subs[col] ||= []).push(cb); data[col] ||= []; setTimeout(() => cb(snap(col), { fromCache: false }), 0); return () => {}; },
+    async set(col, id, obj) { data[col] ||= []; const o = data[col].find((x) => x.id === id); if (o) Object.assign(o, obj); else data[col].push({ id, ...obj }); save(); emit(col); },
     async add(col, obj) { const id = uid(); data[col].push({ id, ...obj }); save(); emit(col); return id; },
     async update(col, id, patch) { const o = data[col].find((x) => x.id === id); if (o) Object.assign(o, patch); save(); emit(col); },
     async remove(col, id) { data[col] = data[col].filter((x) => x.id !== id); save(); emit(col); },
@@ -142,10 +152,11 @@ function firebaseStore() {
     subscribe(col, cb, onError) {
       return F.onSnapshot(F.collection(db, col), { includeMetadataChanges: true }, (snap) => {
         setSync(!snap.metadata.fromCache);
-        cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        cb(snap.docs.map((d) => ({ id: d.id, ...d.data() })), { fromCache: snap.metadata.fromCache });
       }, (err) => onError && onError(err));
     },
-    async add(col, obj) { const ref = F.doc(F.collection(db, col)); await F.setDoc(ref, obj); return ref.id; },
+    async add(col, obj) { const ref = F.doc(F.collection(db, col)); F.setDoc(ref, obj).catch((e) => write(Promise.reject(e))); return ref.id; },
+    async set(col, id, obj) { await F.setDoc(F.doc(db, col, id), obj, { merge: true }); },
     async update(col, id, patch) { await F.updateDoc(F.doc(db, col, id), patch); },
     async remove(col, id) { await F.deleteDoc(F.doc(db, col, id)); },
     async removeMany(col, ids) {
@@ -188,7 +199,7 @@ async function main() {
   if (['listes', 'notes', 'factures'].includes(h)) state.tab = h;
 
   if (DEMO) {
-    state.me = { name: 'Toi', email: '' };
+    state.me = { name: 'Toi', email: 'toi@demo' };
     banner('Mode démo : les données restent sur ce téléphone. Remplis <b>config.js</b> pour partager avec ta conjointe (voir le guide).');
     store = demoStore();
     startApp();
@@ -257,9 +268,10 @@ function startApp() {
       show('#screen-denied');
     } else banner('Problème de synchronisation : ' + esc(err.code || err.message));
   };
-  for (const col of ['lists', 'items', 'notes', 'bills']) {
+  for (const col of ['lists', 'items', 'notes', 'bills', 'payments']) {
     store.subscribe(col, (rows) => { state[col] = rows; state.loaded[col] = true; render(col); }, onErr);
   }
+  store.subscribe('profiles', (rows, meta) => { state.loaded.profiles = true; onProfiles(rows, meta); }, onErr);
   if (!DEMO) refreshPushToken();
 }
 
@@ -337,7 +349,7 @@ function setTab(tab, noHash) {
 function render(col) {
   if (col === 'lists' || col === 'items') renderLists();
   if (col === 'notes') renderNotes();
-  if (col === 'bills') renderBills();
+  if (col === 'bills' || col === 'payments') renderBills();
 }
 
 // ───────────────────────── LISTES ─────────────────────────
@@ -542,7 +554,73 @@ function noteSheet(note) {
   }
 }
 
+// ───────────────────────── PERSONNES ─────────────────────────
+// Chaque personne a un profil (prénom) rangé sous son courriel.
+const amtStr = (n) => (n == null || n === '' ? '' : (Number.isInteger(Number(n)) ? String(Number(n)) : Number(n).toFixed(2).replace('.', ',')));
+const keyOf = (email) => String(email || '').trim().toLowerCase();
+function people() {
+  const list = state.profiles.map((p) => ({ email: p.id, name: p.name || p.id.split('@')[0] }));
+  if (state.me.email && !list.find((p) => p.email === keyOf(state.me.email))) list.push({ email: keyOf(state.me.email), name: state.me.name || 'Moi' });
+  return list.sort((a, b) => (a.email === keyOf(state.me.email) ? -1 : b.email === keyOf(state.me.email) ? 1 : a.name.localeCompare(b.name)));
+}
+function nameOf(email, fallback = '') {
+  if (!email) return fallback;
+  const p = state.profiles.find((x) => x.id === keyOf(email));
+  if (p && p.name) return p.name;
+  return String(email).includes('@') ? String(email).split('@')[0] : String(email); // ancien format : un prénom
+}
+function onProfiles(rows, meta) {
+  state.profiles = rows;
+  const mine = rows.find((p) => p.id === keyOf(state.me.email));
+  if (mine && mine.name) state.me.name = mine.name;
+  else if (!meta?.fromCache && !askedName && state.me.email) { askedName = true; nameSheet(true); }
+  renderBills();
+}
+let askedName = false;
+function nameSheet(first) {
+  const close = openSheet(`
+    <h2>${first ? 'Bienvenue ! 👋' : 'Ton prénom'}</h2>
+    ${first ? '<p class="muted" style="margin-top:-8px">Comment tu t\'appelles ? C\'est le nom que l\'autre verra (factures, listes…).</p>' : ''}
+    <form id="f-name">
+      <label class="field"><span>Prénom</span><input name="name" required maxlength="30" value="${esc(first ? '' : state.me.name)}" autocomplete="given-name"></label>
+      <div class="actions">${first ? '' : '<button type="button" class="btn" data-close>Annuler</button>'}<button class="btn primary">Enregistrer</button></div>
+    </form>`);
+  const f = $('#f-name');
+  setTimeout(() => f.name.focus(), 50);
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const name = f.name.value.trim();
+    if (!name) return;
+    state.me.name = name;
+    write(store.set('profiles', keyOf(state.me.email), { name, updatedAt: now() }));
+    close();
+  };
+}
+
 // ───────────────────────── FACTURES ─────────────────────────
+// owner : 'shared' (les deux, selon split) ou le courriel d'une personne.
+// split : { courriel: pourcentage } pour les factures partagées (50/50 par défaut).
+function sharesOf(owner, split) {
+  const ps = people();
+  if (owner && owner !== 'shared') return { [keyOf(owner)]: 1 };
+  if (ps.length < 2) return ps.length ? { [ps[0].email]: 1 } : {};
+  const [a, b] = ps;
+  const pa = split && split[a.email] != null ? Number(split[a.email]) : (split && split[b.email] != null ? 100 - Number(split[b.email]) : 50);
+  return { [a.email]: pa / 100, [b.email]: (100 - pa) / 100 };
+}
+function ownerLabel(b) {
+  if (b.owner && b.owner !== 'shared') return '👤 ' + nameOf(b.owner);
+  const s = sharesOf('shared', b.split);
+  const vals = Object.values(s);
+  if (vals.length === 2 && vals[0] !== 0.5) return `👥 ${Math.round(vals[0] * 100)}/${Math.round(vals[1] * 100)}`;
+  return '👥 Nous deux';
+}
+const dueWindow = (b) => Math.max(7, Number(b.remindDays) || 0);
+function paidThisCycle(b) {
+  if (!b.paidFor || !b.recurrence || b.recurrence === 'none') return false;
+  return nextDue({ ...b, dueDate: b.paidFor }) === b.dueDate;
+}
+
 function billStatus(b) {
   if (b.paid) return { cls: 'paid', label: 'Payée' };
   const d = daysUntil(b.dueDate);
@@ -554,88 +632,255 @@ function billStatus(b) {
 }
 
 function renderBills() {
-  const unpaid = state.bills.filter((b) => !b.paid).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
-  const paid = state.bills.filter((b) => b.paid).sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0));
-  $('#bills-empty').hidden = state.bills.length > 0;
+  const all = state.bills;
+  const unpaid = all.filter((b) => !b.paid).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  const paid = all.filter((b) => b.paid).sort((a, b) => (b.paidAt || 0) - (a.paidAt || 0));
+  const toPay = unpaid.filter((b) => daysUntil(b.dueDate) <= dueWindow(b));
+  const upcoming = unpaid.filter((b) => daysUntil(b.dueDate) > dueWindow(b));
+  $('#bills-empty').hidden = all.length > 0 || state.billView === 'bilan';
 
-  const urgent = unpaid.filter((b) => daysUntil(b.dueDate) <= 0).length;
-  const soonCount = unpaid.filter((b) => { const d = daysUntil(b.dueDate); return d <= Math.max(3, b.remindDays || 0); }).length;
+  const soonCount = unpaid.filter((b) => daysUntil(b.dueDate) <= Math.max(3, b.remindDays || 0)).length;
   const badge = $('#bills-badge');
   badge.hidden = !soonCount; badge.textContent = soonCount;
 
-  const in30 = unpaid.filter((b) => daysUntil(b.dueDate) <= 30);
-  const total30 = in30.reduce((s, b) => s + (Number(b.amount) || 0), 0);
-  $('#bills-summary').innerHTML = state.bills.length ? `
-    <div class="stat ${urgent ? 'alert' : ''}"><div class="k">${urgent ? 'En retard / aujourd\'hui' : 'Bientôt dues'}</div><div class="v">${urgent || soonCount}</div></div>
-    <div class="stat"><div class="k">À payer (30 jours)</div><div class="v">${money.format(total30)}</div></div>` : '';
+  const seg = `<div class="seg">
+      <button data-view="due" class="${state.billView === 'due' ? 'on' : ''}">Échéances</button>
+      <button data-view="bilan" class="${state.billView === 'bilan' ? 'on' : ''}">Bilan</button>
+    </div>`;
 
-  const billHTML = (b) => {
-    const s = billStatus(b);
-    return `
-      <div class="bill ${s.cls}" data-id="${esc(b.id)}">
-        <div class="stripe"></div>
-        <button class="main">
-          <div class="name"><span>${esc(b.name)}</span>${REC_SHORT[b.recurrence] ? `<span class="rec">${REC_SHORT[b.recurrence]}</span>` : ''}</div>
-          <div class="sub">
-            ${b.amount != null && b.amount !== '' ? `<span class="amt">${money.format(Number(b.amount))}</span>` : ''}
-            <span class="pill">${s.label}</span>
-            <span>${b.paid ? (b.paidAt ? 'le ' + fmtDate(toISO(new Date(b.paidAt))) : '') : fmtDate(b.dueDate)}</span>
-          </div>
-        </button>
-        <button class="pay">${b.paid ? '↺' : '✓ Payée'}</button>
-      </div>`;
+  if (state.billView === 'bilan') {
+    $('#bills-summary').innerHTML = seg;
+    $('#bills-list').innerHTML = bilanHTML();
+    $('#fab-bill').hidden = true;
+  } else {
+    $('#fab-bill').hidden = false;
+    const urgent = unpaid.filter((b) => daysUntil(b.dueDate) <= 0).length;
+    const total30 = unpaid.filter((b) => daysUntil(b.dueDate) <= 30).reduce((s, b) => s + (Number(b.amount) || 0), 0);
+    $('#bills-summary').innerHTML = seg + (all.length ? `
+      <div class="summary">
+        <div class="stat ${urgent ? 'alert' : ''}"><div class="k">${urgent ? 'En retard / aujourd\'hui' : 'À payer bientôt'}</div><div class="v">${urgent || toPay.length}</div></div>
+        <div class="stat"><div class="k">Prévu (30 jours)</div><div class="v">${money.format(total30)}</div></div>
+      </div>` : '');
+
+    const billHTML = (b) => {
+      const s = billStatus(b);
+      const done = paidThisCycle(b);
+      return `
+        <div class="bill ${s.cls}" data-id="${esc(b.id)}">
+          <div class="stripe"></div>
+          <button class="main">
+            <div class="name"><span>${esc(b.name)}</span>${REC_SHORT[b.recurrence] ? `<span class="rec">${REC_SHORT[b.recurrence]}</span>` : ''}</div>
+            <div class="sub">
+              ${b.amount != null && b.amount !== '' ? `<span class="amt">${money.format(Number(b.amount))}</span>` : ''}
+              ${b.paid ? '' : `<span class="pill">${s.label}</span><span>${fmtDate(b.dueDate)}</span>`}
+              ${b.paid ? `<span class="pill">Payée${b.lastPaid ? ' le ' + fmtDate(b.lastPaid) : ''}${b.paidBy ? ' · ' + esc(nameOf(b.paidBy)) : ''}</span>` : ''}
+            </div>
+            <div class="sub2"><span class="owner">${esc(ownerLabel(b))}</span>${done ? `<span class="done-chip">✓ Payée le ${fmtDate(b.lastPaid)}${b.paidBy ? ' par ' + esc(nameOf(b.paidBy)) : ''}</span>` : ''}</div>
+          </button>
+          <button class="pay">${b.paid ? '↺' : '✓ Payée'}</button>
+        </div>`;
+    };
+
+    $('#bills-list').innerHTML =
+      (toPay.length ? `<div class="section-title">⚠️ À payer</div>${toPay.map(billHTML).join('')}`
+        : (all.length ? '<div class="allgood">✓ Rien à payer cette semaine</div>' : '')) +
+      (upcoming.length ? `<div class="section-title">📅 À venir</div>${upcoming.map(billHTML).join('')}` : '') +
+      (paid.length ? `<div class="done-head"><button class="toggle-done" data-paid>${state.showPaid ? '▾' : '▸'} ✓ Payées (${paid.length})</button>${state.showPaid ? '<button class="link-btn" data-clear-paid>Effacer</button>' : ''}</div>${state.showPaid ? paid.map(billHTML).join('') : ''}` : '');
+  }
+
+  $('#bills-summary').onclick = (e) => {
+    const v = e.target.closest('[data-view]');
+    if (v && v.dataset.view !== state.billView) { state.billView = v.dataset.view; ls.set('nd-billview', state.billView); renderBills(); }
   };
-
-  $('#bills-list').innerHTML =
-    (unpaid.length ? `<div class="section-title">À payer</div>${unpaid.map(billHTML).join('')}` : (state.bills.length ? '<div class="empty" style="padding:24px"><p>Tout est payé 🎉</p></div>' : '')) +
-    (paid.length ? `<div class="done-head"><button class="toggle-done" data-paid>${state.showPaid ? '▾' : '▸'} Payées (${paid.length})</button>${state.showPaid ? '<button class="link-btn" data-clear-paid>Effacer</button>' : ''}</div>${state.showPaid ? paid.map(billHTML).join('') : ''}` : '');
-
   $('#bills-list').onclick = async (e) => {
+    const m = e.target.closest('[data-month]');
+    if (m) { state.bilanMonth = shiftMonth(state.bilanMonth, Number(m.dataset.month)); return renderBills(); }
+    const pd = e.target.closest('[data-pay-id]');
+    if (pd) return paymentSheet(state.payments.find((p) => p.id === pd.dataset.payId));
     if (e.target.closest('[data-paid]')) { state.showPaid = !state.showPaid; return renderBills(); }
     if (e.target.closest('[data-clear-paid]')) {
-      if (await confirmSheet('Effacer les factures payées ?', 'Les factures ponctuelles déjà payées seront supprimées.', 'Effacer')) write(store.removeMany('bills', paid.map((b) => b.id)));
+      if (await confirmSheet('Effacer les factures payées ?', 'Les factures uniques déjà payées disparaîtront de la liste. Le bilan les garde.', 'Effacer')) write(store.removeMany('bills', paid.map((b) => b.id)));
       return;
     }
     const el = e.target.closest('.bill'); if (!el) return;
     const b = state.bills.find((x) => x.id === el.dataset.id); if (!b) return;
-    if (e.target.closest('.pay')) payBill(b);
+    if (e.target.closest('.pay')) b.paid ? unpayBill(b) : paySheet(b);
     else billSheet(b);
   };
 }
 
-function payBill(b) {
-  if (b.paid) { write(store.update('bills', b.id, { paid: false, paidAt: null })); return; }
-  const prev = { dueDate: b.dueDate, paid: !!b.paid, paidAt: b.paidAt || null, lastPaid: b.lastPaid || null, paidBy: b.paidBy || null };
-  const next = nextDue(b);
-  if (next) {
-    write(store.update('bills', b.id, { dueDate: next, lastPaid: todayISO(), paidBy: state.me.name }));
-    toast(`${b.name} payée ✓ · prochaine : ${fmtDate(next)}`, 'Annuler', () => write(store.update('bills', b.id, prev)));
-  } else {
-    write(store.update('bills', b.id, { paid: true, paidAt: now(), paidBy: state.me.name }));
-    toast(`${b.name} payée ✓`, 'Annuler', () => write(store.update('bills', b.id, prev)));
+// ── Bilan du mois : qui a payé quoi, et qui doit combien ──
+function monthKey(iso) { return String(iso).slice(0, 7); }
+function shiftMonth(mk, n) { const [y, m] = mk.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; }
+const fmtMonth = new Intl.DateTimeFormat('fr-CA', { month: 'long', year: 'numeric' });
+
+function bilanHTML() {
+  const mk = state.bilanMonth;
+  const label = fmtMonth.format(parseISO(mk + '-01'));
+  const pays = state.payments.filter((p) => monthKey(p.date) === mk).sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+  const ps = people();
+  const paidBy = {}, owes = {};
+  ps.forEach((p) => { paidBy[p.email] = 0; owes[p.email] = 0; });
+  let total = 0;
+  for (const p of pays) {
+    const amt = Number(p.amount) || 0;
+    total += amt;
+    const who = keyOf(p.paidBy);
+    paidBy[who] = (paidBy[who] || 0) + amt;
+    const shares = p.shares && Object.keys(p.shares).length ? p.shares : sharesOf(p.owner || 'shared', p.split);
+    for (const [e, s] of Object.entries(shares)) owes[keyOf(e)] = (owes[keyOf(e)] || 0) + amt * s;
   }
+  const emails = Object.keys(paidBy);
+  const nav = `<div class="month-nav"><button class="icon-btn" data-month="-1" aria-label="Mois précédent">◀</button><b>${label.charAt(0).toUpperCase() + label.slice(1)}</b><button class="icon-btn" data-month="1" aria-label="Mois suivant" ${mk >= monthKey(todayISO()) ? 'disabled' : ''}>▶</button></div>`;
+  if (!pays.length) return nav + `<div class="empty"><div class="empty-emoji">📊</div><p>Aucun paiement en ${label}.<br>Touche « ✓ Payée » sur une facture pour qu'elle apparaisse ici.</p></div>`;
+
+  const max = Math.max(...emails.map((e) => paidBy[e]), 1);
+  const cards = emails.filter((e) => paidBy[e] > 0 || ps.find((p) => p.email === e)).map((e, i) => `
+    <div class="who-row">
+      <div class="who-top"><span class="avatar a${i % 2}">${esc(nameOf(e).charAt(0).toUpperCase())}</span><b>${esc(nameOf(e))}</b><span class="spacer"></span><b>${money.format(paidBy[e])}</b></div>
+      <div class="bar"><span class="a${i % 2}" style="width:${(paidBy[e] / max) * 100}%"></span></div>
+    </div>`).join('');
+
+  // Équilibre entre deux personnes : ce que chacun a payé moins sa part.
+  let balance = '';
+  if (emails.length === 2) {
+    const [a, b] = emails;
+    const diff = paidBy[a] - owes[a]; // > 0 : a a trop payé, b lui doit diff
+    if (Math.abs(diff) < 1) balance = `<div class="balance ok">✓ Vous êtes à égalité ce mois-ci</div>`;
+    else {
+      const [debtor, creditor] = diff > 0 ? [b, a] : [a, b];
+      balance = `<div class="balance">💸 <b>${esc(nameOf(debtor))}</b> doit <b>${money.format(Math.abs(diff))}</b> à <b>${esc(nameOf(creditor))}</b></div>`;
+    }
+  }
+
+  const rows = pays.map((p) => `
+    <button class="pay-row" data-pay-id="${esc(p.id)}">
+      <span class="pay-date">${fmtDay.format(parseISO(p.date))}</span>
+      <span class="pay-name">${esc(p.name)}<small>${esc(nameOf(p.paidBy))} · ${esc(p.owner && p.owner !== 'shared' ? 'pour ' + nameOf(p.owner) : 'partagée')}</small></span>
+      <b>${money.format(Number(p.amount) || 0)}</b>
+    </button>`).join('');
+
+  return nav + `
+    <div class="card bilan">
+      <div class="k">Total payé</div><div class="v">${money.format(total)}</div>
+      ${cards}
+      ${balance}
+      <p class="muted tiny">La part de chacun suit le « Responsable » de chaque facture (à toi, à elle, ou partagée).</p>
+    </div>
+    <div class="section-title">Paiements (${pays.length})</div>
+    <div class="card list">${rows}</div>`;
+}
+
+// ── Payer : on demande le montant (il varie souvent) et qui a payé ──
+function paySheet(b) {
+  const ps = people();
+  const close = openSheet(`
+    <h2>Payer « ${esc(b.name)} »</h2>
+    <form id="f-pay" autocomplete="off">
+      <div class="row2">
+        <label class="field"><span>Montant payé ($)</span><input name="amount" inputmode="decimal" required value="${b.amount != null && b.amount !== '' ? esc(amtStr(b.amount)) : ''}"></label>
+        <label class="field"><span>Date</span><input name="date" type="date" required value="${todayISO()}"></label>
+      </div>
+      <label class="field"><span>Payée par</span><select name="paidBy">
+        ${ps.map((p) => `<option value="${esc(p.email)}" ${p.email === keyOf(state.me.email) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+      </select></label>
+      ${nextDue(b) ? `<p class="muted tiny">Prochaine échéance : ${fmtDate(nextDue(b))}</p>` : ''}
+      <div class="actions"><button type="button" class="btn" data-close>Annuler</button><button class="btn primary">✓ Confirmer</button></div>
+    </form>`);
+  const f = $('#f-pay');
+  setTimeout(() => { if (!f.amount.value) f.amount.focus(); }, 50);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const amount = Number(f.amount.value.replace(/\s|\$/g, '').replace(',', '.'));
+    if (!isFinite(amount) || amount < 0) { f.amount.focus(); return toast('Montant invalide'); }
+    const date = f.date.value || todayISO();
+    const paidBy = f.paidBy.value;
+    close();
+    const owner = b.owner || 'shared';
+    const shares = sharesOf(owner, b.split);
+    const payId = await store.add('payments', { billId: b.id, name: b.name, amount, date, paidBy, owner, shares, dueDate: b.dueDate, createdAt: now() }).catch((err) => { write(Promise.reject(err)); return null; });
+    const prev = { dueDate: b.dueDate, paid: !!b.paid, paidAt: b.paidAt || null, lastPaid: b.lastPaid || null, paidBy: b.paidBy || null, paidFor: b.paidFor || null };
+    const next = nextDue(b);
+    const patch = { lastPaid: date, paidBy, paidFor: b.dueDate };
+    if (next) write(store.update('bills', b.id, { ...patch, dueDate: next }));
+    else write(store.update('bills', b.id, { ...patch, paid: true, paidAt: now() }));
+    toast(`${b.name} payée ✓${next ? ' · prochaine : ' + fmtDate(next) : ''}`, 'Annuler', () => {
+      write(store.update('bills', b.id, prev));
+      if (payId) write(store.remove('payments', payId));
+    });
+  };
+}
+
+function unpayBill(b) {
+  const p = state.payments.filter((x) => x.billId === b.id).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0))[0];
+  write(store.update('bills', b.id, { paid: false, paidAt: null }));
+  if (p) write(store.remove('payments', p.id));
+}
+
+function paymentSheet(p) {
+  if (!p) return;
+  const ps = people();
+  const close = openSheet(`
+    <h2>Paiement : ${esc(p.name)}</h2>
+    <form id="f-payedit" autocomplete="off">
+      <div class="row2">
+        <label class="field"><span>Montant ($)</span><input name="amount" inputmode="decimal" required value="${esc(amtStr(p.amount))}"></label>
+        <label class="field"><span>Date</span><input name="date" type="date" required value="${esc(p.date)}"></label>
+      </div>
+      <label class="field"><span>Payée par</span><select name="paidBy">
+        ${ps.map((x) => `<option value="${esc(x.email)}" ${x.email === keyOf(p.paidBy) ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+      </select></label>
+      <div class="actions"><button type="button" class="btn danger" id="p-del">Supprimer</button><span class="spacer"></span><button type="button" class="btn" data-close>Annuler</button><button class="btn primary">Enregistrer</button></div>
+    </form>`);
+  const f = $('#f-payedit');
+  f.onsubmit = (e) => {
+    e.preventDefault();
+    const amount = Number(f.amount.value.replace(/\s|\$/g, '').replace(',', '.'));
+    if (!isFinite(amount)) return toast('Montant invalide');
+    write(store.update('payments', p.id, { amount, date: f.date.value, paidBy: f.paidBy.value }));
+    close();
+  };
+  $('#p-del').onclick = async () => {
+    close();
+    if (await confirmSheet('Supprimer ce paiement ?', 'Il disparaît du bilan. La facture, elle, ne change pas.', 'Supprimer')) write(store.remove('payments', p.id));
+  };
 }
 
 function billSheet(b) {
+  const ps = people();
+  const owner = b?.owner || 'shared';
+  const shares = sharesOf('shared', b?.split);
+  const firstPct = ps.length >= 2 ? Math.round((shares[ps[0].email] ?? 0.5) * 100) : 50;
   const close = openSheet(`
     <h2>${b ? 'Modifier la facture' : 'Nouvelle facture'}</h2>
     <form id="f-bill" autocomplete="off">
       <label class="field"><span>Nom</span><input name="name" required maxlength="60" value="${esc(b?.name || '')}" placeholder="ex. Hydro-Québec, Internet, Loyer"></label>
       <div class="row2">
-        <label class="field"><span>Montant ($)</span><input name="amount" inputmode="decimal" value="${b?.amount != null && b?.amount !== '' ? esc(String(b.amount).replace('.', ',')) : ''}" placeholder="optionnel"></label>
+        <label class="field"><span>Montant habituel ($)</span><input name="amount" inputmode="decimal" value="${b?.amount != null && b?.amount !== '' ? esc(amtStr(b.amount)) : ''}" placeholder="optionnel"></label>
         <label class="field"><span>Échéance</span><input name="dueDate" type="date" required value="${esc(b?.dueDate || todayISO())}"></label>
       </div>
       <div class="row2">
         <label class="field"><span>Revient</span><select name="recurrence">
           ${Object.entries(REC).map(([k, v]) => `<option value="${k}" ${(b?.recurrence || 'monthly') === k ? 'selected' : ''}>${v}</option>`).join('')}
         </select></label>
-        <label class="field"><span>Me rappeler</span><select name="remindDays">
+        <label class="field"><span>Rappel</span><select name="remindDays">
           ${[[0, 'Le jour même'], [1, '1 jour avant'], [2, '2 jours avant'], [3, '3 jours avant'], [5, '5 jours avant'], [7, '1 semaine avant'], [14, '2 semaines avant']]
             .map(([k, v]) => `<option value="${k}" ${(b?.remindDays ?? 3) === k ? 'selected' : ''}>${v}</option>`).join('')}
         </select></label>
       </div>
+      <label class="field"><span>Responsable</span><select name="owner">
+        <option value="shared" ${owner === 'shared' ? 'selected' : ''}>👥 Nous deux (partagée)</option>
+        ${ps.map((p) => `<option value="${esc(p.email)}" ${keyOf(owner) === p.email ? 'selected' : ''}>👤 ${esc(p.name)}</option>`).join('')}
+      </select></label>
+      ${ps.length >= 2 ? `
+      <div class="field" id="split-wrap" ${owner === 'shared' ? '' : 'hidden'}>
+        <span>Partage</span>
+        <div class="split-labels"><b>${esc(ps[0].name)} <i id="pctA">${firstPct}</i> %</b><b>${esc(ps[1].name)} <i id="pctB">${100 - firstPct}</i> %</b></div>
+        <input type="range" name="split" min="0" max="100" step="5" value="${firstPct}">
+      </div>` : ''}
+      <p class="muted tiny" id="owner-hint">${owner === 'shared' ? 'Les rappels vont à vous deux.' : 'Les rappels vont seulement à cette personne.'}</p>
       <label class="field"><span>Note</span><input name="note" maxlength="200" value="${esc(b?.note || '')}" placeholder="ex. Prélèvement auto, payer par AccèsD…"></label>
-      ${b?.lastPaid ? `<p class="muted" style="font-size:13px;margin:-4px 0 12px">Dernier paiement : ${fmtDate(b.lastPaid)}${b.paidBy ? ' par ' + esc(b.paidBy) : ''}</p>` : ''}
+      ${b?.lastPaid ? `<p class="muted tiny">Dernier paiement : ${fmtDate(b.lastPaid)}${b.paidBy ? ' par ' + esc(nameOf(b.paidBy)) : ''}</p>` : ''}
       <div class="actions">
         ${b ? '<button type="button" class="btn danger" id="b-del">Supprimer</button>' : ''}
         <span class="spacer"></span>
@@ -645,17 +890,24 @@ function billSheet(b) {
     </form>`);
   const f = $('#f-bill');
   if (!b) setTimeout(() => f.name.focus(), 50);
+  f.owner.onchange = () => {
+    const shared = f.owner.value === 'shared';
+    if ($('#split-wrap')) $('#split-wrap').hidden = !shared;
+    $('#owner-hint').textContent = shared ? 'Les rappels vont à vous deux.' : 'Les rappels vont seulement à cette personne.';
+  };
+  if (f.split) f.split.oninput = () => { $('#pctA').textContent = f.split.value; $('#pctB').textContent = 100 - f.split.value; };
   f.onsubmit = (e) => {
     e.preventDefault();
     const raw = f.amount.value.replace(/\s|\$/g, '').replace(',', '.');
     const amount = raw === '' ? null : Number(raw);
     if (raw !== '' && !isFinite(amount)) { f.amount.focus(); return toast('Montant invalide'); }
     const dueDate = f.dueDate.value;
-    const recurrence = f.recurrence.value;
     const data = {
-      name: f.name.value.trim(), amount, dueDate, recurrence,
+      name: f.name.value.trim(), amount, dueDate, recurrence: f.recurrence.value,
       remindDays: Number(f.remindDays.value), note: f.note.value.trim(),
-      anchorDay: parseISO(dueDate).getDate()
+      anchorDay: parseISO(dueDate).getDate(),
+      owner: f.owner.value,
+      split: f.split && f.owner.value === 'shared' ? { [ps[0].email]: Number(f.split.value), [ps[1].email]: 100 - Number(f.split.value) } : null
     };
     if (!data.name || !dueDate) return;
     if (b) write(store.update('bills', b.id, data));
@@ -664,7 +916,7 @@ function billSheet(b) {
   };
   if (b) $('#b-del').onclick = async () => {
     close();
-    if (await confirmSheet(`Supprimer « ${b.name} » ?`, '', 'Supprimer')) write(store.remove('bills', b.id));
+    if (await confirmSheet(`Supprimer « ${b.name} » ?`, 'Les paiements déjà faits restent dans le bilan.', 'Supprimer')) write(store.remove('bills', b.id));
   };
 }
 
@@ -683,6 +935,10 @@ function openSettings() {
   const close = openSheet(`
     <h2>Réglages</h2>
     <div class="setting">
+      <div><div class="t">Ton prénom</div><div class="d">${esc(state.me.name || '—')}</div></div>
+      <button class="btn small" id="s-name">Modifier</button>
+    </div>
+    <div class="setting">
       <div><div class="t">Rappels de factures</div><div class="d">${esc(ns.text)}</div></div>
       ${ns.ok ? (ns.on ? '<button class="btn small" id="s-test">Tester</button>' : '<button class="btn primary small" id="s-notif">Activer</button>') : ''}
     </div>
@@ -699,6 +955,7 @@ function openSettings() {
   });
   $('#s-install') && ($('#s-install').onclick = async () => { installEvent.prompt(); await installEvent.userChoice; installEvent = null; close(); });
   $('#s-logout') && ($('#s-logout').onclick = logout);
+  $('#s-name').onclick = () => nameSheet(false);
 }
 
 async function getSWReg() {
@@ -725,7 +982,7 @@ async function savePushToken() {
   if (!token) return false;
   const old = ls.get('nd-push-token');
   const F = fb.fsM;
-  await F.setDoc(F.doc(fb.db, 'tokens', token), { email: state.me.email, name: state.me.name, updatedAt: now(), ua: navigator.userAgent.slice(0, 120) });
+  await F.setDoc(F.doc(fb.db, 'tokens', token), { email: keyOf(state.me.email), name: state.me.name, updatedAt: now(), ua: navigator.userAgent.slice(0, 120) });
   if (old && old !== token) F.deleteDoc(F.doc(fb.db, 'tokens', old)).catch(() => {});
   ls.set('nd-push-token', token);
   M.onMessage(messaging, (p) => { const d = p.data || {}; toast(`${d.title || ''} — ${d.body || ''}`); });

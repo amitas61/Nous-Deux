@@ -301,3 +301,42 @@ main { padding: 0 16px calc(96px + var(--bottom)); max-width: 640px; margin: 0 a
   box-shadow: 0 8px 24px rgba(0, 0, 0, .25); animation: up .2s;
 }
 .toast button { border: 0; background: none; color: #f4c56c; font-weight: 700; padding: 4px; }
+
+/* ── Factures v2 ── */
+#bills-summary.summary { display: block; margin: 4px 0 0; }
+#bills-summary .summary { margin: 12px 0 4px; }
+.seg { display: flex; background: var(--surface-2); border-radius: 12px; padding: 4px; gap: 4px; }
+.seg button { flex: 1; border: 0; background: none; padding: 9px; border-radius: 9px; font-weight: 700; color: var(--muted); }
+.seg button.on { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.bill .sub2 { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; font-size: 12px; }
+.owner { color: var(--muted); font-weight: 600; }
+.done-chip { color: var(--ok); background: var(--ok-soft); font-weight: 700; padding: 1px 8px; border-radius: 999px; }
+.allgood { margin: 18px 4px 4px; padding: 14px 16px; border-radius: var(--radius); background: var(--ok-soft); color: var(--ok); font-weight: 700; }
+.tiny { font-size: 13px; margin: -4px 0 12px; }
+.split-labels { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 4px; }
+.split-labels i { font-style: normal; }
+.field input[type=range] { padding: 0; border: 0; background: none; accent-color: var(--brand); height: 32px; }
+
+.month-nav { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 8px; font-size: 17px; }
+.month-nav .icon-btn { color: var(--text); font-size: 14px; }
+.month-nav .icon-btn:disabled { opacity: .25; }
+.card { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow); padding: 16px; }
+.card.list { padding: 0; overflow: hidden; }
+.bilan .k { font-size: 13px; color: var(--muted); font-weight: 600; }
+.bilan .v { font-size: 28px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 12px; }
+.bilan .tiny { margin: 12px 0 0; font-size: 12px; }
+.who-row { margin: 10px 0; }
+.who-top { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.who-top .spacer { flex: 1; }
+.avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 800; font-size: 13px; color: #fff; }
+.avatar.a0, .bar .a0 { background: var(--brand); }
+.avatar.a1, .bar .a1 { background: var(--accent); }
+.bar { height: 10px; border-radius: 5px; background: var(--surface-2); overflow: hidden; }
+.bar span { display: block; height: 100%; border-radius: 5px; transition: width .4s; }
+.balance { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: var(--warn-soft); }
+.balance.ok { background: var(--ok-soft); color: var(--ok); font-weight: 700; }
+.pay-row { display: flex; align-items: center; gap: 12px; width: 100%; border: 0; background: none; text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.pay-row:last-child { border-bottom: 0; }
+.pay-date { width: 72px; flex: none; font-size: 13px; color: var(--muted); }
+.pay-name { flex: 1; min-width: 0; font-weight: 600; }
+.pay-name small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); }
