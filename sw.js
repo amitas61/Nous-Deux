@@ -1,7 +1,7 @@
 // Service worker : fonctionnement hors ligne + notifications de factures.
 importScripts('./config.js');
 
-const CACHE = 'nous-deux-v7';
+const CACHE = 'nous-deux-v8';
 const ASSETS = [
   './', './index.html', './app.js', './styles.css', './config.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/badge-96.png'
@@ -24,7 +24,9 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== self.location.origin) return;
   e.respondWith(
-    fetch(req)
+    // « no-cache » : toujours vérifier auprès de GitHub s'il y a une nouvelle version
+    // (sinon le navigateur peut garder l'ancienne jusqu'à 10 minutes).
+    fetch(req, { cache: 'no-cache' })
       .then((res) => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); }
         return res;

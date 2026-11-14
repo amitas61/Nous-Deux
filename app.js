@@ -1492,9 +1492,6 @@ function openSettings() {
       <div><div class="t">Rappels de factures</div><div class="d">${esc(ns.text)}</div></div>
       ${ns.ok ? (ns.on ? '<button class="btn small" id="s-test">Tester</button>' : '<button class="btn primary small" id="s-notif">Activer</button>') : ''}
     </div>
-    <div class="setting">
-      <div><div class="t">Notifications instantanées</div><div class="d">${PUSH_URL ? 'Activées (épicerie, ajouts d\'articles)' : 'Non configurées : l\'autre voit l\'alerte en ouvrant l\'appli. Optionnel, voir le guide (étape 10).'}</div></div>
-    </div>
     ${installEvent ? `<div class="setting"><div><div class="t">Installer l'appli</div><div class="d">Ajoute « Nous deux » à l'écran d'accueil.</div></div><button class="btn primary small" id="s-install">Installer</button></div>` : ''}
     <div class="setting">
       <div><div class="t">${DEMO ? 'Mode démo' : 'Connecté'}</div><div class="d">${DEMO ? 'Données locales sur cet appareil' : esc(state.me.email)}</div></div>
